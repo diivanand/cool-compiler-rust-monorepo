@@ -53,16 +53,52 @@ cool-compiler-rust-monorepo/
 │   ├── cool_frontend/
 │   │   ├── src/
 │   │   │   ├── ast.rs        # AST definitions
-│   │   │   ├── lexer.rs      # Logos-based lexer (Rust)
-│   │   │   ├── parser.rs    # Chumsky-based parser (Rust)
+│   │   │   ├── lexer.rs      # Logos-based lexer
+│   │   │   ├── parser.rs     # Chumsky-based parser with pratt parsing enabled
 │   │   │   └── lib.rs
 │   │   └── Cargo.toml
 │   │
 │   └── cool_parse_cli/
 │       ├── src/
-│       │   └── main.rs       # CLI: parse .cl files → AST
+│       │   └── main.rs       # CLI: parse .cl files → AST (Abstract Syntax Tree)
 │       └── Cargo.toml
 │
 ├── LICENSE.md                # Apache 2.0 license
 ├── NOTICE.md                 # Attribution notice
 └── README.md
+```
+
+## Parsing Strategy
+
+This compiler uses a **recursive-descent Pratt parser** approach for parsing.
+
+### Why Pratt Parsing and what is it?
+
+COOL’s expression grammar contains many operators with different precedence and associativity (arithmetic, comparison, assignment, dispatch, etc.). A Pratt parser (also known as *Top-Down Operator Precedence parsing*) provides a clean and extensible way to handle this without complex grammar rewrites or parser generators.
+
+The benefits of this approach include:
+
+- **Explicit precedence handling** without left-recursive grammar rules
+- **Simple, readable implementation** in idiomatic Rust
+- **Easy extensibility** for adding new operators or expression forms
+- Natural integration with a **hand-written recursive-descent parser** for non-expression constructs (classes, features, formals, etc.)
+
+These two resources give a clear explanation of Pratt Parsing:
+- Matklad’s article *“Simple but Powerful Pratt Parsing”*  
+  https://matklad.github.io/2020/04/13/simple-but-powerful-pratt-parsing.html
+- The Pratt parsing walkthrough by Bob Nystrom (author of *Crafting Interpreters*):  
+  https://www.youtube.com/watch?v=0c8b7YfsBKs
+
+### High-Level Approach
+
+- Non-expression constructs (programs, classes, features, methods, attributes) are parsed using **standard recursive descent**.
+- Expressions are parsed using a **Pratt parser**, driven by:
+  - *null denotation (nud)* functions for prefix expressions
+  - *left denotation (led)* functions for infix and postfix expressions
+  - A precedence table that encodes COOL operator precedence and associativity
+
+This hybrid strategy keeps the parser:
+
+- Predictable and debuggable
+- Free of external parser generators
+- Faithful to the original COOL specification while remaining maintainable
