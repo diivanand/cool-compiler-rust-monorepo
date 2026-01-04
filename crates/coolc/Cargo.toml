@@ -1,0 +1,10 @@
+[package]
+name = "coolc"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cool_frontend = { path = "../cool_frontend" }
+cool_codegen  = { path = "../cool_codegen" }
+
+inkwell = { version = "0.7.0", features = ["llvm21-1", "target-all"] }

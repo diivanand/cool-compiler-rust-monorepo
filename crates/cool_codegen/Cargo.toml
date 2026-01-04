@@ -1,0 +1,8 @@
+[package]
+name = "cool_codegen"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cool_frontend = { path = "../cool_frontend" }
+inkwell = { version = "0.7.0", features = ["llvm21-1", "target-all"] } # LLVM 21.1.x line :contentReference[oaicite:2]{index=2}

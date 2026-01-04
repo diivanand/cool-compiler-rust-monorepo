@@ -40,25 +40,23 @@ Doing so would likely violate course academic integrity policies.
 This project is intended for:
 - Learning
 - Research
-- Personal experimentation
+- Personal experimentation and growth (Learn and Improve Rust and Compiler Programming Skills)
 - Reference-quality compiler engineering
 
 ---
 
-## Current Implementation Status
-
-### Lexer - Complete
+### Lexer — Complete
 - Implemented using **Logos**
 - Handles keywords, identifiers, literals, operators, and comments
 - Produces a clean token stream for parsing
 
-### Parser - Complete
+### Parser — Complete
 - Implemented using **Chumsky**
 - Builds a fully-typed **Abstract Syntax Tree (AST)**
 - Uses a **recursive-descent + Pratt parsing** hybrid approach
 - Correctly encodes COOL operator precedence and associativity
 
-### Static Type Checker - Complete
+### Static Type Checker — Complete
 - Implements the **static semantic rules from Section 12 of the COOL specification**
 - Performs:
   - Class table construction
@@ -71,19 +69,37 @@ This project is intended for:
   - Conformance (`≤`) checks
 - Detects and reports **multiple type errors in a single run**
 
-### LLVM IR Code Generation - NOT YET STARTED
+### LLVM IR Code Generation — In Progress
+- Uses **Inkwell** targeting **LLVM 21.1.x**
+- Infrastructure in place for:
+  - Class layout and tagging
+  - Object allocation via runtime calls
+  - Vtable-based dynamic dispatch
+  - Emission of native arm64 object files
+- Lowering from COOL AST to LLVM IR is actively under development
 
-### COOL Runtime Implementation on Apple ARM 64 - NOT YET STARTED
+### COOL Runtime (Apple Silicon arm64) — In Progress
+- Custom runtime crate with:
+  - Stable object header layout
+  - Explicit vtable structures
+  - C-compatible ABI for generated code
+- Runtime functions exposed via `extern "C"` for LLVM-generated calls
 
-### Garbage Collection Implementation - NOT YET STARTED
+### Garbage Collection — Implemented (Evolving)
+- **Stop-the-world, mark-and-sweep GC**
+- **Precise root tracking via a shadow stack**
+- GC metadata derived from compiler-emitted pointer maps
+- Single-threaded, deterministic design
+- Unit-tested at the runtime level
 
 ### Overall Status
 
 At this stage, the compiler can:
 - Parse one or more `.cl` files as a single program
-- Print the constructed AST
+- Build a complete AST
 - Perform full semantic validation
 - Reject ill-typed COOL programs with meaningful diagnostics
+- In Progress: Emit native arm64 object files linked against a custom runtime
 
 ---
 
@@ -97,14 +113,30 @@ cool-compiler-rust-monorepo/
 │   │   │   ├── ast.rs          # AST definitions
 │   │   │   ├── lexer.rs        # Logos-based lexer
 │   │   │   ├── parser.rs       # Chumsky-based parser with Pratt parsing
-│   │   │   ├── typechecker.rs  # COOL semantic type checker (Section 12)
+│   │   │   ├── typechecker.rs  # COOL static type checker (Section 12)
 │   │   │   └── lib.rs          # Frontend public API
 │   │   └── Cargo.toml
 │   │
-│   └── cool_parse_cli/
-│       ├── src/
-│       │   └── main.rs         # CLI: parse + typecheck .cl files
-│       └── Cargo.toml
+│   ├── cool_codegen/
+│   │   ├── src/
+│   │   │   ├── abi.rs          # Runtime ABI definitions
+│   │   │   ├── emit.rs         # LLVM object emission (arm64)
+│   │   │   ├── lowering.rs     # AST → LLVM IR lowering (in progress)
+│   │   │   └── lib.rs
+│   │   └── Cargo.toml
+│   │
+│   ├── cool_runtime/
+│   │   ├── src/
+│   │   │   ├── gc.rs           # Mark-and-sweep garbage collector
+│   │   │   ├── rt_print.rs     # Runtime I/O helpers
+│   │   │   └── lib.rs
+│   │   └── Cargo.toml
+│   │
+│   ├── cool_parse_cli/
+│   │   └── src/main.rs         # Frontend-only CLI (AST + type checking)
+│   │
+│   └── coolc/
+│       └── src/main.rs         # Full compiler driver
 │
 ├── LICENSE.md                  # Apache 2.0 license
 ├── NOTICE.md                   # Attribution notice
