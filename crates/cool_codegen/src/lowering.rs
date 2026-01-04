@@ -59,7 +59,7 @@ pub fn lower_program<'ctx>(
     let main_obj_ty = ctx.struct_type(&[obj_header_ty.into()], false);
 
     // vtable structs (compiler convenience)
-    let i32_ptr_ty = i32_ty.ptr_type(AddressSpace::default());
+    let i32_ptr_ty = ctx.ptr_type(AddressSpace::default());
 
     let vtable_int_ty =
         ctx.struct_type(&[i32_ty.into(), i32_ty.into(), i32_ty.into(), i32_ptr_ty.into()], false);
@@ -236,42 +236,36 @@ fn define_main_main<'ctx>(
     let int_ptr = builder
         .build_pointer_cast(
             boxed_ptr,
-            int_obj_ty.ptr_type(AddressSpace::default()),
+            optr_ty,
             "int_ptr",
         )
         .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
 
     // header = field 0
-    let hdr_gep = unsafe {
-        builder
-            .build_struct_gep(*int_obj_ty, int_ptr, 0, "hdr_gep")
-            .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?
-    };
+    let hdr_gep = builder
+        .build_struct_gep(*int_obj_ty, int_ptr, 0, "hdr_gep")
+        .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
 
     let hdr_ptr = builder
         .build_pointer_cast(
             hdr_gep,
-            obj_header_ty.ptr_type(AddressSpace::default()),
+            optr_ty,
             "hdr_ptr",
         )
         .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
 
     // header.vtable = field 0
-    let vtable_gep = unsafe {
-        builder
-            .build_struct_gep(*obj_header_ty, hdr_ptr, 0, "hdr_vtable")
-            .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?
-    };
+    let vtable_gep = builder
+        .build_struct_gep(*obj_header_ty, hdr_ptr, 0, "hdr_vtable")
+        .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
     builder
         .build_store(vtable_gep, vt_int.as_pointer_value().const_cast(optr_ty))
         .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
 
     // header.size_bytes = field 1
-    let size_gep = unsafe {
-        builder
-            .build_struct_gep(*obj_header_ty, hdr_ptr, 1, "hdr_size")
-            .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?
-    };
+    let size_gep = builder
+        .build_struct_gep(*obj_header_ty, hdr_ptr, 1, "hdr_size")
+        .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
     let size_i32 = int_obj_ty
         .size_of()
         .ok_or_else(|| CodegenError::Llvm("could not compute Int size".into()))?
@@ -281,31 +275,25 @@ fn define_main_main<'ctx>(
         .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
 
     // header.marked = field 2
-    let marked_gep = unsafe {
-        builder
-            .build_struct_gep(*obj_header_ty, hdr_ptr, 2, "hdr_marked")
-            .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?
-    };
+    let marked_gep = builder
+        .build_struct_gep(*obj_header_ty, hdr_ptr, 2, "hdr_marked")
+        .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
     builder
         .build_store(marked_gep, i8_ty.const_zero())
         .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
 
     // header.tag = field 4
-    let tag_gep = unsafe {
-        builder
-            .build_struct_gep(*obj_header_ty, hdr_ptr, 4, "hdr_tag")
-            .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?
-    };
+    let tag_gep = builder
+        .build_struct_gep(*obj_header_ty, hdr_ptr, 4, "hdr_tag")
+        .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
     builder
         .build_store(tag_gep, i32_ty.const_int(abi::TAG_INT as u64, false))
         .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
 
     // int.value = field 1
-    let val_gep = unsafe {
-        builder
-            .build_struct_gep(*int_obj_ty, int_ptr, 1, "int_val")
-            .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?
-    };
+    let val_gep = builder
+        .build_struct_gep(*int_obj_ty, int_ptr, 1, "int_val")
+        .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
     builder
         .build_store(val_gep, val_i32)
         .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
@@ -355,31 +343,27 @@ fn define_c_main<'ctx>(
     let main_ptr = builder
         .build_pointer_cast(
             main_obj,
-            main_obj_ty.ptr_type(AddressSpace::default()),
+            optr_ty,
             "main_ptr",
         )
         .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
 
     // header ptr
-    let hdr_gep = unsafe {
-        builder
-            .build_struct_gep(*main_obj_ty, main_ptr, 0, "main_hdr_gep")
-            .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?
-    };
+    let hdr_gep = builder
+        .build_struct_gep(*main_obj_ty, main_ptr, 0, "main_hdr_gep")
+        .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
     let hdr_ptr = builder
         .build_pointer_cast(
             hdr_gep,
-            obj_header_ty.ptr_type(AddressSpace::default()),
+            optr_ty,
             "main_hdr_ptr",
         )
         .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
 
     // load header.vtable
-    let vtable_gep = unsafe {
-        builder
-            .build_struct_gep(*obj_header_ty, hdr_ptr, 0, "main_vtable_gep")
-            .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?
-    };
+    let vtable_gep = builder
+        .build_struct_gep(*obj_header_ty, hdr_ptr, 0, "main_vtable_gep")
+        .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
 
     let vtable_loaded = builder
         .build_load(optr_ty, vtable_gep, "vtable_loaded")
@@ -388,17 +372,15 @@ fn define_c_main<'ctx>(
     let vt_main_ptr = builder
         .build_pointer_cast(
             vtable_loaded.into_pointer_value(),
-            vtable_main_ty.ptr_type(AddressSpace::default()),
+            optr_ty,
             "vt_main_ptr",
         )
         .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
 
     // slot0: field 4
-    let slot0_gep = unsafe {
-        builder
-            .build_struct_gep(*vtable_main_ty, vt_main_ptr, 4, "slot0_gep")
-            .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?
-    };
+    let slot0_gep = builder
+        .build_struct_gep(*vtable_main_ty, vt_main_ptr, 4, "slot0_gep")
+        .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
 
     let slot0 = builder
         .build_load(optr_ty, slot0_gep, "slot0")
@@ -406,7 +388,7 @@ fn define_c_main<'ctx>(
 
     // cast to fn(ptr)->ptr and call indirectly
     let method_fn_ty = optr_ty.fn_type(&[optr_ty.into()], false);
-    let method_ptr_ty = method_fn_ty.ptr_type(AddressSpace::default());
+    let method_ptr_ty = optr_ty;
     let slot0_typed = builder
         .build_pointer_cast(slot0.into_pointer_value(), method_ptr_ty, "slot0_typed")
         .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
@@ -423,16 +405,14 @@ fn define_c_main<'ctx>(
     let int_ptr = builder
         .build_pointer_cast(
             boxed_int,
-            int_obj_ty.ptr_type(AddressSpace::default()),
+            optr_ty,
             "int_ptr",
         )
         .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
 
-    let val_gep = unsafe {
-        builder
-            .build_struct_gep(*int_obj_ty, int_ptr, 1, "int_val_gep")
-            .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?
-    };
+    let val_gep = builder
+        .build_struct_gep(*int_obj_ty, int_ptr, 1, "int_val_gep")
+        .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
 
     let val_i32 = builder
         .build_load(i32_ty, val_gep, "int_val")
