@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0
 use std::{env, fs, process};
 
-use cool_frontend::{lex, parse_program, strip_comments, type_check_program};
+use cool_frontend::{lex, parse_program, type_check_program};
 
 fn usage_and_exit() -> ! {
     eprintln!("Usage: cool_parse_cli <file1.cl> <file2.cl> ...");
@@ -30,18 +30,12 @@ fn main() {
 
         if i > 0 {
             combined.push('\n');
-            combined.push('\n');
         }
         combined.push_str(&src);
     }
 
-    // Strip COOL comments before lexing (your function returns Result<String, String>)
-    let combined = strip_comments(&combined).unwrap_or_else(|e| {
-        eprintln!("Comment stripping error: {e}");
-        process::exit(1);
-    });
-
-    let toks = lex(combined.as_str()).unwrap_or_else(|e| {
+    // Lex the combined input (lex handles comment stripping internally)
+    let toks = lex(&combined).unwrap_or_else(|e| {
         eprintln!("Lex error: {e}");
         process::exit(1);
     });

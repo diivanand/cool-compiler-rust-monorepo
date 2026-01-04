@@ -124,21 +124,8 @@ impl TypeContext {
             return true;
         }
 
-        // Walk upward using owned Strings (prevents lifetime issues).
-        let mut cur = a_name.to_string();
-        loop {
-            let info = match self.classes.get(&cur) {
-                Some(i) => i,
-                None => return false,
-            };
-            if info.parent == cur {
-                return false;
-            }
-            if info.parent == b_name {
-                return true;
-            }
-            cur = info.parent.clone();
-        }
+        // Use inheritance_chain helper to check if b_name is in a's ancestors
+        self.inheritance_chain(a_name).contains(&b_name.to_string())
     }
 
     /// LUB / join: closest common ancestor.
@@ -153,33 +140,14 @@ impl TypeContext {
             return CoolType::named(a0);
         }
 
-        let mut ancestors = BTreeSet::<String>::new();
-        let mut cur = a0.to_string();
-        loop {
-            ancestors.insert(cur.clone());
-            let info = match self.classes.get(&cur) {
-                Some(i) => i,
-                None => break,
-            };
-            if info.parent == cur {
-                break;
-            }
-            cur = info.parent.clone();
-        }
+        // Use inheritance_chain helper - collect ancestors of a0 into a set
+        let ancestors: BTreeSet<String> = self.inheritance_chain(a0).into_iter().collect();
 
-        let mut cur = b0.to_string();
-        loop {
-            if ancestors.contains(&cur) {
-                return CoolType::named(cur);
+        // Walk b0's chain and find first common ancestor
+        for ancestor in self.inheritance_chain(b0) {
+            if ancestors.contains(&ancestor) {
+                return CoolType::named(ancestor);
             }
-            let info = match self.classes.get(&cur) {
-                Some(i) => i,
-                None => break,
-            };
-            if info.parent == cur {
-                break;
-            }
-            cur = info.parent.clone();
         }
 
         CoolType::named(OBJECT)
@@ -197,6 +165,24 @@ impl TypeContext {
             }
             cur = info.parent.clone();
         }
+    }
+
+    /// Walks the inheritance chain from a given class to Object, returning each class name.
+    /// Returns an iterator-like vector starting from the given class and ending at Object.
+    fn inheritance_chain(&self, class: &str) -> Vec<String> {
+        let mut chain = Vec::new();
+        let mut cur = class.to_string();
+        loop {
+            chain.push(cur.clone());
+            let Some(info) = self.classes.get(&cur) else {
+                break;
+            };
+            if info.parent == cur {
+                break;
+            }
+            cur = info.parent.clone();
+        }
+        chain
     }
 }
 
@@ -347,18 +333,14 @@ fn install_features_and_check(ctx: &TypeContext, p: &Program, errors: &mut Vec<T
                         }
                     }
 
-                    let duplicate = match ctx2.classes.get(&cname) {
-                        Some(info) => info.attrs.contains_key(name),
-                        None => false,
-                    };
-                    if duplicate {
-                        errors.push(TypeError::new(format!(
-                            "Duplicate attribute {name} in class {cname}"
-                        )));
-                        continue;
-                    }
-
+                    // Use single HashMap lookup with get_mut to check and insert
                     if let Some(info) = ctx2.classes.get_mut(&cname) {
+                        if info.attrs.contains_key(name) {
+                            errors.push(TypeError::new(format!(
+                                "Duplicate attribute {name} in class {cname}"
+                            )));
+                            continue;
+                        }
                         info.attrs.insert(name.clone(), declared);
                     }
                 }
@@ -405,18 +387,14 @@ fn install_features_and_check(ctx: &TypeContext, p: &Program, errors: &mut Vec<T
                         ret,
                     };
 
-                    let duplicate = match ctx2.classes.get(&cname) {
-                        Some(info) => info.methods.contains_key(name),
-                        None => false,
-                    };
-                    if duplicate {
-                        errors.push(TypeError::new(format!(
-                            "Duplicate method {name} in class {cname}"
-                        )));
-                        continue;
-                    }
-
+                    // Use single HashMap lookup with get_mut to check and insert
                     if let Some(info) = ctx2.classes.get_mut(&cname) {
+                        if info.methods.contains_key(name) {
+                            errors.push(TypeError::new(format!(
+                                "Duplicate method {name} in class {cname}"
+                            )));
+                            continue;
+                        }
                         info.methods.insert(name.clone(), sig);
                     }
                 }
@@ -436,11 +414,14 @@ fn install_features_and_check(ctx: &TypeContext, p: &Program, errors: &mut Vec<T
         for feat in &class.features {
             if let Feature::Method { name, .. } = feat {
                 if let Some(parent_sig) = ctx2.lookup_method(&parent, name) {
-                    if let Some(my_sig) = ctx2.lookup_method(cname, name) {
-                        if my_sig != parent_sig {
-                            errors.push(TypeError::new(format!(
-                                "Invalid override of method {cname}.{name}: signature differs from inherited method"
-                            )));
+                    // Get method directly from current class instead of walking inheritance chain
+                    if let Some(class_info) = ctx2.classes.get(cname) {
+                        if let Some(my_sig) = class_info.methods.get(name) {
+                            if my_sig != &parent_sig {
+                                errors.push(TypeError::new(format!(
+                                    "Invalid override of method {cname}.{name}: signature differs from inherited method"
+                                )));
+                            }
                         }
                     }
                 }
@@ -499,20 +480,8 @@ fn install_features_and_check(ctx: &TypeContext, p: &Program, errors: &mut Vec<T
 }
 
 fn add_all_attrs_to_env(ctx: &TypeContext, class: &str, env: &mut ObjEnv) {
-    let mut chain = Vec::<String>::new();
-    let mut cur = class.to_string();
-    loop {
-        chain.push(cur.clone());
-        let info = match ctx.classes.get(&cur) {
-            Some(i) => i,
-            None => break,
-        };
-        if info.parent == cur {
-            break;
-        }
-        cur = info.parent.clone();
-    }
-
+    // Use inheritance_chain helper and reverse to go from Object down to current class
+    let chain = ctx.inheritance_chain(class);
     for c in chain.into_iter().rev() {
         if let Some(info) = ctx.classes.get(&c) {
             for (k, v) in &info.attrs {
@@ -696,10 +665,14 @@ fn type_of_expr(
             let tl = type_of_expr(ctx, o, current_class, lhs, errors);
             let tr = type_of_expr(ctx, o, current_class, rhs, errors);
 
+            // Cache resolved types to avoid redundant resolve_self_type() calls
+            let tl_resolved = ctx.resolve_self_type(&tl, current_class);
+            let tr_resolved = ctx.resolve_self_type(&tr, current_class);
+
             match op {
                 BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => {
-                    if ctx.resolve_self_type(&tl, current_class) != CoolType::named(INT)
-                        || ctx.resolve_self_type(&tr, current_class) != CoolType::named(INT)
+                    if tl_resolved != CoolType::named(INT)
+                        || tr_resolved != CoolType::named(INT)
                     {
                         errors.push(TypeError::new(format!(
                             "Arithmetic op expects Int/Int, got {:?} and {:?}",
@@ -710,8 +683,8 @@ fn type_of_expr(
                 }
 
                 BinOp::Lt | BinOp::Le => {
-                    if ctx.resolve_self_type(&tl, current_class) != CoolType::named(INT)
-                        || ctx.resolve_self_type(&tr, current_class) != CoolType::named(INT)
+                    if tl_resolved != CoolType::named(INT)
+                        || tr_resolved != CoolType::named(INT)
                     {
                         errors.push(TypeError::new(format!(
                             "Comparison op expects Int/Int, got {:?} and {:?}",
@@ -722,9 +695,7 @@ fn type_of_expr(
                 }
 
                 BinOp::Eq => {
-                    let l = ctx.resolve_self_type(&tl, current_class);
-                    let r = ctx.resolve_self_type(&tr, current_class);
-
+                    // tl_resolved and tr_resolved already computed above
                     let basic = |t: &CoolType| -> Option<&'static str> {
                         match t {
                             CoolType::Named(s) if s == INT => Some(INT),
@@ -734,17 +705,17 @@ fn type_of_expr(
                         }
                     };
 
-                    if let (Some(lb), Some(rb)) = (basic(&l), basic(&r)) {
+                    if let (Some(lb), Some(rb)) = (basic(&tl_resolved), basic(&tr_resolved)) {
                         if lb != rb {
                             errors.push(TypeError::new(format!(
                                 "Illegal equality test between {} and {}",
                                 lb, rb
                             )));
                         }
-                    } else if basic(&l).is_some() || basic(&r).is_some() {
+                    } else if basic(&tl_resolved).is_some() || basic(&tr_resolved).is_some() {
                         errors.push(TypeError::new(format!(
                             "Illegal equality test between {:?} and {:?}",
-                            l, r
+                            tl_resolved, tr_resolved
                         )));
                     }
 
@@ -767,11 +738,13 @@ fn type_of_expr(
                 CoolType::SelfType => current_class.to_string(),
             };
 
-            let dispatch_class = if let Some(st) = static_type {
-                if !ctx.has_class(st) {
+            // Determine dispatch class, avoiding redundant clones
+            let dispatch_class = match static_type {
+                Some(st) if !ctx.has_class(st) => {
                     errors.push(TypeError::new(format!("Unknown static dispatch type @{st}")));
-                    recv_class.clone()
-                } else {
+                    recv_class
+                }
+                Some(st) => {
                     let st_ty = CoolType::named(st.clone());
                     if !ctx.conforms(&t0, &st_ty, current_class) {
                         errors.push(TypeError::new(format!(
@@ -781,8 +754,7 @@ fn type_of_expr(
                     }
                     st.clone()
                 }
-            } else {
-                recv_class.clone()
+                None => recv_class,
             };
 
             let Some(sig) = ctx.lookup_method(&dispatch_class, method) else {
@@ -861,4 +833,236 @@ mod tests {
         let errs = res.err().unwrap();
         assert!(errs.iter().any(|e| e.msg.contains("If condition must be Bool")));
     }
+
+    #[test]
+    fn test_method_override_validation() {
+        // Valid override - same signature
+        let src = r#"
+            class Parent inherits Object {
+              foo(x: Int) : Int { x };
+            };
+            class Child inherits Parent {
+              foo(x: Int) : Int { x + 1 };
+            };
+        "#;
+
+        let toks = lex(src).unwrap();
+        let prog = parse_program(&toks).unwrap();
+        let res = type_check_program(&prog);
+        assert!(res.is_ok(), "Valid override should succeed: {res:?}");
+
+        // Invalid override - different signature
+        let src = r#"
+            class Parent inherits Object {
+              foo(x: Int) : Int { x };
+            };
+            class Child inherits Parent {
+              foo(x: Int) : Bool { tRuE };
+            };
+        "#;
+
+        let toks = lex(src).unwrap();
+        let prog = parse_program(&toks).unwrap();
+        let res = type_check_program(&prog);
+        assert!(res.is_err(), "Invalid override should fail");
+        let errs = res.err().unwrap();
+        assert!(errs.iter().any(|e| e.msg.contains("Invalid override")));
+    }
+
+    #[test]
+    fn test_binary_ops_with_self_type() {
+        // Test that resolve_self_type is cached properly in binary operations
+        let src = r#"
+            class Counter inherits Object {
+              value : Int;
+              add(other : SELF_TYPE) : Int {
+                value + value
+              };
+            };
+        "#;
+
+        let toks = lex(src).unwrap();
+        let prog = parse_program(&toks).unwrap();
+        let res = type_check_program(&prog);
+        assert!(res.is_ok(), "{res:?}");
+    }
+
+    #[test]
+    fn test_duplicate_attribute_detection() {
+        let src = r#"
+            class Test inherits Object {
+              x : Int;
+              x : Bool;
+            };
+        "#;
+
+        let toks = lex(src).unwrap();
+        let prog = parse_program(&toks).unwrap();
+        let res = type_check_program(&prog);
+        assert!(res.is_err());
+        let errs = res.err().unwrap();
+        assert!(errs.iter().any(|e| e.msg.contains("Duplicate attribute")));
+    }
+
+    #[test]
+    fn test_duplicate_method_detection() {
+        let src = r#"
+            class Test inherits Object {
+              foo() : Int { 1 };
+              foo() : Int { 2 };
+            };
+        "#;
+
+        let toks = lex(src).unwrap();
+        let prog = parse_program(&toks).unwrap();
+        let res = type_check_program(&prog);
+        assert!(res.is_err());
+        let errs = res.err().unwrap();
+        assert!(errs.iter().any(|e| e.msg.contains("Duplicate method")));
+    }
+
+    #[test]
+    fn test_inheritance_chain() {
+        let ctx = TypeContext::new();
+
+        // Test built-in inheritance chain
+        let chain = ctx.inheritance_chain("IO");
+        assert_eq!(chain, vec!["IO".to_string(), "Object".to_string()]);
+
+        // Test Object's chain (self-reference)
+        let chain = ctx.inheritance_chain("Object");
+        assert_eq!(chain, vec!["Object".to_string()]);
+    }
+
+    #[test]
+    fn test_conforms_uses_inheritance_chain() {
+        let src = r#"
+            class A inherits Object {};
+            class B inherits A {};
+            class C inherits B {};
+            class Main inherits Object {
+              test() : Object {
+                new C
+              };
+            };
+        "#;
+
+        let toks = lex(src).unwrap();
+        let prog = parse_program(&toks).unwrap();
+        let res = type_check_program(&prog);
+        assert!(res.is_ok(), "C should conform to Object: {res:?}");
+    }
+
+    #[test]
+    fn test_dispatch_with_static_type() {
+        let src = r#"
+            class Parent inherits Object {
+              foo() : Int { 1 };
+            };
+            class Child inherits Parent {
+              foo() : Int { 2 };
+            };
+            class Main inherits Object {
+              test(c : Child) : Int {
+                c@Parent.foo()
+              };
+            };
+        "#;
+
+        let toks = lex(src).unwrap();
+        let prog = parse_program(&toks).unwrap();
+        let res = type_check_program(&prog);
+        assert!(res.is_ok(), "Static dispatch should work: {res:?}");
+    }
+
+    #[test]
+    fn test_dispatch_with_invalid_static_type() {
+        let src = r#"
+            class Parent inherits Object {
+              foo() : Int { 1 };
+            };
+            class Main inherits Object {
+              test(p : Parent) : Int {
+                p@NonExistent.foo()
+              };
+            };
+        "#;
+
+        let toks = lex(src).unwrap();
+        let prog = parse_program(&toks).unwrap();
+        let res = type_check_program(&prog);
+        assert!(res.is_err());
+        let errs = res.err().unwrap();
+        assert!(errs.iter().any(|e| e.msg.contains("Unknown static dispatch type")));
+    }
+
+    #[test]
+    fn test_lub_computation() {
+        let src = r#"
+            class A inherits Object {};
+            class B inherits A {};
+            class C inherits A {};
+            class Main inherits Object {
+              test(flag : Bool, b : B, c : C) : A {
+                if flag then b else c fi
+              };
+            };
+        "#;
+
+        let toks = lex(src).unwrap();
+        let prog = parse_program(&toks).unwrap();
+        let res = type_check_program(&prog);
+        assert!(res.is_ok(), "LUB of B and C should be A: {res:?}");
+    }
+
+    #[test]
+    fn test_comparison_operations() {
+        let src = r#"
+            class Main inherits Object {
+              test(x : Int, y : Int) : Bool {
+                x < y
+              };
+            };
+        "#;
+
+        let toks = lex(src).unwrap();
+        let prog = parse_program(&toks).unwrap();
+        let res = type_check_program(&prog);
+        assert!(res.is_ok(), "{res:?}");
+    }
+
+    #[test]
+    fn test_equality_with_basic_types() {
+        let src = r#"
+            class Main inherits Object {
+              test(x : Int, y : Int) : Bool {
+                x = y
+              };
+            };
+        "#;
+
+        let toks = lex(src).unwrap();
+        let prog = parse_program(&toks).unwrap();
+        let res = type_check_program(&prog);
+        assert!(res.is_ok(), "{res:?}");
+    }
+
+    #[test]
+    fn test_equality_type_mismatch() {
+        let src = r#"
+            class Main inherits Object {
+              test(x : Int, y : Bool) : Bool {
+                x = y
+              };
+            };
+        "#;
+
+        let toks = lex(src).unwrap();
+        let prog = parse_program(&toks).unwrap();
+        let res = type_check_program(&prog);
+        assert!(res.is_err());
+        let errs = res.err().unwrap();
+        assert!(errs.iter().any(|e| e.msg.contains("Illegal equality test")));
+    }
 }
+
