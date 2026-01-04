@@ -3,4 +3,7 @@ resolver = "2"
 members = [
     "crates/cool_frontend",
     "crates/cool_parse_cli",
+    "crates/cool_runtime",
+    "crates/cool_codegen",
+    "crates/coolc",
 ]
