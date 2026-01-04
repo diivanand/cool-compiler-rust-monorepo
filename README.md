@@ -12,7 +12,7 @@ This project currently implements the **frontend** (lexer, parser, AST) and is e
 
 ---
 
-## 📚 COOL Language Background
+## COOL Language Background
 
 **COOL (Classroom Object-Oriented Language)** was **invented at the University of California, Berkeley** as a teaching language for compiler construction.
 
@@ -26,7 +26,7 @@ This project respects the original academic intent of COOL while reimplementing 
 
 ---
 
-## ⚠️ Academic Integrity Notice
+## Academic Integrity Notice
 
 This repository is **not intended to be used for classroom submissions**.
 
@@ -45,6 +45,40 @@ This project is intended for:
 
 ---
 
+## Current Implementation Status
+
+### Lexer - Dev Complete (Pending: more tests before QA Complete)
+- Implemented using **Logos**
+- Handles keywords, identifiers, literals, operators, and comments
+- Produces a clean token stream for parsing
+
+### Parser - Dev Complete (Pending: more tests before QA Complete)
+- Implemented using **Chumsky**
+- Builds a fully-typed **Abstract Syntax Tree (AST)**
+- Uses a **recursive-descent + Pratt parsing** hybrid approach
+- Correctly encodes COOL operator precedence and associativity
+
+### Static Type Checker - Dev Complete (Pending: more tests before QA Complete)
+- Implements the **static semantic rules from Section 12 of the COOL specification**
+- Performs:
+  - Class table construction
+  - Inheritance validation and cycle detection
+  - Attribute and method signature validation
+  - Method override checking
+  - Full expression type checking
+  - `SELF_TYPE` handling
+  - Least-upper-bound (LUB) computation
+  - Conformance (`≤`) checks
+- Detects and reports **multiple type errors in a single run**
+
+At this stage, the compiler can:
+- Parse one or more `.cl` files as a single program
+- Print the constructed AST
+- Perform full semantic validation
+- Reject ill-typed COOL programs with meaningful diagnostics
+
+---
+
 ## 🗂 Repository Structure
 
 ```text
@@ -52,19 +86,20 @@ cool-compiler-rust-monorepo/
 ├── crates/
 │   ├── cool_frontend/
 │   │   ├── src/
-│   │   │   ├── ast.rs        # AST definitions
-│   │   │   ├── lexer.rs      # Logos-based lexer
-│   │   │   ├── parser.rs     # Chumsky-based parser with pratt parsing enabled
-│   │   │   └── lib.rs
+│   │   │   ├── ast.rs          # AST definitions
+│   │   │   ├── lexer.rs        # Logos-based lexer
+│   │   │   ├── parser.rs       # Chumsky-based parser with Pratt parsing
+│   │   │   ├── typechecker.rs  # COOL semantic type checker (Section 12)
+│   │   │   └── lib.rs          # Frontend public API
 │   │   └── Cargo.toml
 │   │
 │   └── cool_parse_cli/
 │       ├── src/
-│       │   └── main.rs       # CLI: parse .cl files → AST (Abstract Syntax Tree)
+│       │   └── main.rs         # CLI: parse + typecheck .cl files
 │       └── Cargo.toml
 │
-├── LICENSE.md                # Apache 2.0 license
-├── NOTICE.md                 # Attribution notice
+├── LICENSE.md                  # Apache 2.0 license
+├── NOTICE.md                   # Attribution notice
 └── README.md
 ```
 
