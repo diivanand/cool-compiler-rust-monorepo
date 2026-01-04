@@ -12,6 +12,9 @@ use inkwell::{context::Context, module::Module};
 pub enum CodegenError {
     NotImplemented(&'static str),
     Llvm(String),
+    MissingMainClass,
+    MissingMainMethod,
+    Unsupported(&'static str),
 }
 
 impl std::fmt::Display for CodegenError {
@@ -19,6 +22,9 @@ impl std::fmt::Display for CodegenError {
         match self {
             CodegenError::NotImplemented(s) => write!(f, "codegen not implemented: {s}"),
             CodegenError::Llvm(s) => write!(f, "llvm error: {s}"),
+            CodegenError::MissingMainClass => write!(f, "missing class Main"),
+            CodegenError::MissingMainMethod => write!(f, "missing method Main.main"),
+            CodegenError::Unsupported(s) => write!(f, "unsupported feature in codegen: {s}"),
         }
     }
 }
@@ -36,10 +42,7 @@ impl<'ctx> Codegen<'ctx> {
         Self { ctx, module }
     }
 
-    pub fn compile_program(&mut self, _p: &Program) -> Result<(), CodegenError> {
-        // Path 2 lowering goes here
-        Err(CodegenError::NotImplemented(
-            "Program → LLVM lowering pass",
-        ))
+    pub fn compile_program(&mut self, p: &Program) -> Result<(), CodegenError> {
+        lowering::lower_program(self.ctx, &self.module, p)
     }
 }
