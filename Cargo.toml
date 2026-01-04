@@ -1,0 +1,6 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/cool_frontend",
+    "crates/cool_parse_cli",
+]
