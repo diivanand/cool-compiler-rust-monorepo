@@ -114,26 +114,28 @@ fn mark_from_roots(roots: &[*mut *mut u8]) {
 }
 
 unsafe fn mark_obj(obj: *mut u8) {
-    let hdr = obj as *mut ObjHeader;
-    if (*hdr).marked != 0 {
-        return;
-    }
-    (*hdr).marked = 1;
+    unsafe {
+        let hdr = obj as *mut ObjHeader;
+        if (*hdr).marked != 0 {
+            return;
+        }
+        (*hdr).marked = 1;
 
-    let vt = (*hdr).vtable;
-    if vt.is_null() {
-        return;
-    }
+        let vt = (*hdr).vtable;
+        if vt.is_null() {
+            return;
+        }
 
-    let ptr_count = (*vt).ptr_count as usize;
-    let offsets = (*vt).ptr_offsets;
+        let ptr_count = (*vt).ptr_count as usize;
+        let offsets = (*vt).ptr_offsets;
 
-    for i in 0..ptr_count {
-        let off = *offsets.add(i) as usize;
-        let field_ptr_addr = obj.add(off) as *mut *mut u8;
-        let child = *field_ptr_addr;
-        if !child.is_null() {
-            mark_obj(child);
+        for i in 0..ptr_count {
+            let off = *offsets.add(i) as usize;
+            let field_ptr_addr = obj.add(off) as *mut *mut u8;
+            let child = *field_ptr_addr;
+            if !child.is_null() {
+                mark_obj(child);
+            }
         }
     }
 }
