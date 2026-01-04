@@ -47,18 +47,18 @@ This project is intended for:
 
 ## Current Implementation Status
 
-### Lexer - Dev Complete (Pending: more tests before QA Complete)
+### Lexer - Complete
 - Implemented using **Logos**
 - Handles keywords, identifiers, literals, operators, and comments
 - Produces a clean token stream for parsing
 
-### Parser - Dev Complete (Pending: more tests before QA Complete)
+### Parser - Complete
 - Implemented using **Chumsky**
 - Builds a fully-typed **Abstract Syntax Tree (AST)**
 - Uses a **recursive-descent + Pratt parsing** hybrid approach
 - Correctly encodes COOL operator precedence and associativity
 
-### Static Type Checker - Dev Complete (Pending: more tests before QA Complete)
+### Static Type Checker - Complete
 - Implements the **static semantic rules from Section 12 of the COOL specification**
 - Performs:
   - Class table construction
@@ -70,6 +70,14 @@ This project is intended for:
   - Least-upper-bound (LUB) computation
   - Conformance (`≤`) checks
 - Detects and reports **multiple type errors in a single run**
+
+### LLVM IR Code Generation - NOT YET STARTED
+
+### COOL Runtime Implementation on Apple ARM 64 - NOT YET STARTED
+
+### Garbage Collection Implementation - NOT YET STARTED
+
+### Overall Status
 
 At this stage, the compiler can:
 - Parse one or more `.cl` files as a single program

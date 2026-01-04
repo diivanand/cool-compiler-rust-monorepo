@@ -445,8 +445,8 @@ fn install_features_and_check(ctx: &TypeContext, p: &Program, errors: &mut Vec<T
                         let t_init = type_of_expr(&ctx2, &mut o.clone(), cname, init_expr, errors);
                         if !ctx2.conforms(&t_init, &declared, cname) {
                             errors.push(TypeError::new(format!(
-                                "Attribute init type does not conform: {cname}.{name} : {:?} <- {:?}",
-                                declared, t_init
+                                "Attribute init type does not conform: {cname}.{name} : {} <- {}",
+                                declared.as_named().unwrap_or("").to_string(), t_init.as_named().unwrap_or("").to_string()
                             )));
                         }
                     }
@@ -469,8 +469,8 @@ fn install_features_and_check(ctx: &TypeContext, p: &Program, errors: &mut Vec<T
 
                     if !ctx2.conforms(&body_ty, &declared_ret, cname) {
                         errors.push(TypeError::new(format!(
-                            "Method body type does not conform: {cname}.{name} declared {:?} but body is {:?}",
-                            declared_ret, body_ty
+                            "Method body type does not conform: {cname}.{name} declared {} but body is {}",
+                            declared_ret.as_named().unwrap_or("").to_string(), body_ty.as_named().unwrap_or("").to_string()
                         )));
                     }
                 }
@@ -528,8 +528,8 @@ fn type_of_expr(
             let t_rhs = type_of_expr(ctx, o, current_class, expr, errors);
             if !ctx.conforms(&t_rhs, &t_var, current_class) {
                 errors.push(TypeError::new(format!(
-                    "Type mismatch in assignment '{name} <- ...': rhs {:?} does not conform to {:?}",
-                    t_rhs, t_var
+                    "Type mismatch in assignment '{name} <- ...': rhs {} does not conform to {}",
+                    t_rhs.as_named().unwrap_or("").to_string(), t_var.as_named().unwrap_or("").to_string()
                 )));
             }
             t_rhs
@@ -547,8 +547,8 @@ fn type_of_expr(
             let t_cond = type_of_expr(ctx, o, current_class, cond, errors);
             if ctx.resolve_self_type(&t_cond, current_class) != CoolType::named(BOOL) {
                 errors.push(TypeError::new(format!(
-                    "If condition must be Bool, got {:?}",
-                    t_cond
+                    "If condition must be Bool, got {}",
+                    t_cond.as_named().unwrap_or("").to_string()
                 )));
             }
             let t_then = type_of_expr(ctx, o, current_class, then_, errors);
@@ -560,8 +560,8 @@ fn type_of_expr(
             let t_cond = type_of_expr(ctx, o, current_class, cond, errors);
             if ctx.resolve_self_type(&t_cond, current_class) != CoolType::named(BOOL) {
                 errors.push(TypeError::new(format!(
-                    "While condition must be Bool, got {:?}",
-                    t_cond
+                    "While condition must be Bool, got {}",
+                    t_cond.as_named().unwrap_or("").to_string()
                 )));
             }
             let _ = type_of_expr(ctx, o, current_class, body, errors);
@@ -585,8 +585,8 @@ fn type_of_expr(
                     let t_init = type_of_expr(ctx, o, current_class, init, errors);
                     if !ctx.conforms(&t_init, &declared, current_class) {
                         errors.push(TypeError::new(format!(
-                            "Let init type mismatch for {} : {:?} <- {:?}",
-                            b.name, declared, t_init
+                            "Let init type mismatch for {} : {} <- {}",
+                            b.name, declared.as_named().unwrap_or("").to_string(), t_init.as_named().unwrap_or("").to_string()
                         )));
                     }
                 }
@@ -648,7 +648,7 @@ fn type_of_expr(
         Expr::Not(inner) => {
             let t = type_of_expr(ctx, o, current_class, inner, errors);
             if ctx.resolve_self_type(&t, current_class) != CoolType::named(BOOL) {
-                errors.push(TypeError::new(format!("'not' expects Bool, got {:?}", t)));
+                errors.push(TypeError::new(format!("'not' expects Bool, got {}", t.as_named().unwrap_or("").to_string())));
             }
             CoolType::named(BOOL)
         }
@@ -656,7 +656,7 @@ fn type_of_expr(
         Expr::Neg(inner) => {
             let t = type_of_expr(ctx, o, current_class, inner, errors);
             if ctx.resolve_self_type(&t, current_class) != CoolType::named(INT) {
-                errors.push(TypeError::new(format!("'~' expects Int, got {:?}", t)));
+                errors.push(TypeError::new(format!("'~' expects Int, got {}", t.as_named().unwrap_or("").to_string())));
             }
             CoolType::named(INT)
         }
@@ -675,8 +675,8 @@ fn type_of_expr(
                         || tr_resolved != CoolType::named(INT)
                     {
                         errors.push(TypeError::new(format!(
-                            "Arithmetic op expects Int/Int, got {:?} and {:?}",
-                            tl, tr
+                            "Arithmetic op expects Int/Int, got {} and {}",
+                            tl.as_named().unwrap_or("").to_string(), tr.as_named().unwrap_or("").to_string()
                         )));
                     }
                     CoolType::named(INT)
@@ -687,8 +687,8 @@ fn type_of_expr(
                         || tr_resolved != CoolType::named(INT)
                     {
                         errors.push(TypeError::new(format!(
-                            "Comparison op expects Int/Int, got {:?} and {:?}",
-                            tl, tr
+                            "Comparison op expects Int/Int, got {} and {}",
+                            tl.as_named().unwrap_or("").to_string(), tr.as_named().unwrap_or("").to_string()
                         )));
                     }
                     CoolType::named(BOOL)
@@ -714,8 +714,8 @@ fn type_of_expr(
                         }
                     } else if basic(&tl_resolved).is_some() || basic(&tr_resolved).is_some() {
                         errors.push(TypeError::new(format!(
-                            "Illegal equality test between {:?} and {:?}",
-                            tl_resolved, tr_resolved
+                            "Illegal equality test between {} and {}",
+                            tl_resolved.as_named().unwrap_or(""), tr_resolved.as_named().unwrap_or("")
                         )));
                     }
 
@@ -748,8 +748,8 @@ fn type_of_expr(
                     let st_ty = CoolType::named(st.clone());
                     if !ctx.conforms(&t0, &st_ty, current_class) {
                         errors.push(TypeError::new(format!(
-                            "Static dispatch requires receiver type {:?} to conform to {}",
-                            t0, st
+                            "Static dispatch requires receiver type {} to conform to {}",
+                            t0.as_named().unwrap_or("").to_string(), st
                         )));
                     }
                     st.clone()
@@ -777,10 +777,10 @@ fn type_of_expr(
                 if let Some(t_formal) = sig.formals.get(i) {
                     if !ctx.conforms(&t_arg, t_formal, current_class) {
                         errors.push(TypeError::new(format!(
-                            "Arg {} type mismatch calling {dispatch_class}.{method}: expected {:?}, got {:?}",
+                            "Arg {} type mismatch calling {dispatch_class}.{method}: expected {}, got {}",
                             i + 1,
-                            t_formal,
-                            t_arg
+                            t_formal.as_named().unwrap_or("").to_string(),
+                            t_arg.as_named().unwrap_or("").to_string()
                         )));
                     }
                 }
