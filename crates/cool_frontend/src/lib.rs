@@ -7,8 +7,8 @@ pub mod parser;
 pub mod typechecker;
 
 pub use ast::*;
-pub use lexer::{lex, strip_comments, Tok};
-pub use parser::{parse_program, ParseError};
+pub use lexer::{Tok, lex, strip_comments};
+pub use parser::{ParseError, parse_program};
 
 // Re-export current typechecker API (matches the file we fixed)
-pub use typechecker::{type_check_program, CoolType, TypeError};
+pub use typechecker::{CoolType, TypeError, type_check_program};

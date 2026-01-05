@@ -8,35 +8,38 @@ pub struct Program {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Class {
-    pub name: String,              // TYPE
-    pub parent: Option<String>,     // TYPE
+    pub name: String,           // TYPE
+    pub parent: Option<String>, // TYPE
     pub features: Vec<Feature>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Feature {
     Method {
-        name: String,              // ID
+        name: String, // ID
         formals: Vec<Formal>,
-        ret_type: String,          // TYPE
+        ret_type: String, // TYPE
         body: Expr,
     },
     Attr {
-        name: String,              // ID
-        ty: String,                // TYPE
+        name: String, // ID
+        ty: String,   // TYPE
         init: Option<Expr>,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Formal {
-    pub name: String,              // ID
-    pub ty: String,                // TYPE
+    pub name: String, // ID
+    pub ty: String,   // TYPE
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
-    Assign { name: String, expr: Box<Expr> },
+    Assign {
+        name: String,
+        expr: Box<Expr>,
+    },
 
     Dispatch {
         recv: Box<Expr>,
@@ -76,7 +79,7 @@ pub enum Expr {
     Not(Box<Expr>),
 
     // unary arithemtic negation
-    Neg(Box<Expr>),       // ~expr
+    Neg(Box<Expr>), // ~expr
 
     // infix binary operations
     Bin {

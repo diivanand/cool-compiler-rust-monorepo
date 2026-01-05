@@ -40,7 +40,11 @@ fn class_parser<'src>() -> impl Parser<'src, &'src [Tok], Class, PExtra<'src>> {
                 )
                 .then_ignore(just(Tok::RBrace)),
         )
-        .map(|((name, parent), features)| Class { name, parent, features })
+        .map(|((name, parent), features)| Class {
+            name,
+            parent,
+            features,
+        })
 }
 
 fn feature_parser<'src>() -> impl Parser<'src, &'src [Tok], Feature, PExtra<'src>> {
@@ -88,8 +92,7 @@ fn formal_parser<'src>() -> impl Parser<'src, &'src [Tok], Formal, PExtra<'src>>
 }
 
 fn type_id<'src>() -> impl Parser<'src, &'src [Tok], String, PExtra<'src>> {
-    select! { Tok::TypeId(s) => s }
-        .or(just(Tok::SelfType).to("SELF_TYPE".to_string()))
+    select! { Tok::TypeId(s) => s }.or(just(Tok::SelfType).to("SELF_TYPE".to_string()))
 }
 
 fn obj_id<'src>() -> impl Parser<'src, &'src [Tok], String, PExtra<'src>> {
@@ -213,17 +216,17 @@ pub fn expr_parser<'src>() -> impl Parser<'src, &'src [Tok], Expr, PExtra<'src>>
             .then_ignore(just(Tok::RParen));
 
         // Optional self-dispatch: id(args) => self.id(args)
-        let primary = atom
-            .then(args.clone().or_not())
-            .map(|(a, maybe_args)| match (a, maybe_args) {
-                (Expr::Id(name), Some(args)) => Expr::Dispatch {
-                    recv: Box::new(Expr::Self_),
-                    static_type: None,
-                    method: name,
-                    args,
-                },
-                (other, _) => other,
-            });
+        let primary =
+            atom.then(args.clone().or_not())
+                .map(|(a, maybe_args)| match (a, maybe_args) {
+                    (Expr::Id(name), Some(args)) => Expr::Dispatch {
+                        recv: Box::new(Expr::Self_),
+                        static_type: None,
+                        method: name,
+                        args,
+                    },
+                    (other, _) => other,
+                });
 
         // recv [@TYPE] . id(args)
         let dispatch_step = just(Tok::At)
@@ -237,12 +240,14 @@ pub fn expr_parser<'src>() -> impl Parser<'src, &'src [Tok], Expr, PExtra<'src>>
         let postfix = primary
             .then(dispatch_step.repeated().collect::<Vec<_>>())
             .map(|(base, steps)| {
-                steps.into_iter().fold(base, |recv, (static_type, method, args)| Expr::Dispatch {
-                    recv: Box::new(recv),
-                    static_type,
-                    method,
-                    args,
-                })
+                steps
+                    .into_iter()
+                    .fold(base, |recv, (static_type, method, args)| Expr::Dispatch {
+                        recv: Box::new(recv),
+                        static_type,
+                        method,
+                        args,
+                    })
             });
 
         // Pratt fold signatures (from docs) :contentReference[oaicite:2]{index=2}
@@ -250,31 +255,38 @@ pub fn expr_parser<'src>() -> impl Parser<'src, &'src [Tok], Expr, PExtra<'src>>
         // infix:  |lhs, op, rhs, extra|
         let pratt_expr = postfix.pratt((
             pratt::prefix(1, just(Tok::Tilde), |_, rhs, _| Expr::Neg(Box::new(rhs))),
-            pratt::prefix(1, just(Tok::KwIsVoid), |_, rhs, _| Expr::IsVoid(Box::new(rhs))),
+            pratt::prefix(1, just(Tok::KwIsVoid), |_, rhs, _| {
+                Expr::IsVoid(Box::new(rhs))
+            }),
             pratt::prefix(1, just(Tok::KwNot), |_, rhs, _| Expr::Not(Box::new(rhs))),
-
-            pratt::infix(pratt::left(2), just(Tok::Star), |lhs, _, rhs, _| Expr::Bin {
-                op: BinOp::Mul,
-                lhs: Box::new(lhs),
-                rhs: Box::new(rhs),
+            pratt::infix(pratt::left(2), just(Tok::Star), |lhs, _, rhs, _| {
+                Expr::Bin {
+                    op: BinOp::Mul,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                }
             }),
-            pratt::infix(pratt::left(2), just(Tok::Slash), |lhs, _, rhs, _| Expr::Bin {
-                op: BinOp::Div,
-                lhs: Box::new(lhs),
-                rhs: Box::new(rhs),
+            pratt::infix(pratt::left(2), just(Tok::Slash), |lhs, _, rhs, _| {
+                Expr::Bin {
+                    op: BinOp::Div,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                }
             }),
-
-            pratt::infix(pratt::left(3), just(Tok::Plus), |lhs, _, rhs, _| Expr::Bin {
-                op: BinOp::Add,
-                lhs: Box::new(lhs),
-                rhs: Box::new(rhs),
+            pratt::infix(pratt::left(3), just(Tok::Plus), |lhs, _, rhs, _| {
+                Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                }
             }),
-            pratt::infix(pratt::left(3), just(Tok::Minus), |lhs, _, rhs, _| Expr::Bin {
-                op: BinOp::Sub,
-                lhs: Box::new(lhs),
-                rhs: Box::new(rhs),
+            pratt::infix(pratt::left(3), just(Tok::Minus), |lhs, _, rhs, _| {
+                Expr::Bin {
+                    op: BinOp::Sub,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                }
             }),
-
             pratt::infix(pratt::left(4), just(Tok::Le), |lhs, _, rhs, _| Expr::Bin {
                 op: BinOp::Le,
                 lhs: Box::new(lhs),
@@ -290,17 +302,20 @@ pub fn expr_parser<'src>() -> impl Parser<'src, &'src [Tok], Expr, PExtra<'src>>
                 lhs: Box::new(lhs),
                 rhs: Box::new(rhs),
             }),
-
-            pratt::infix(pratt::right(5), just(Tok::Assign), |lhs, _, rhs, _| match lhs {
-                Expr::Id(name) => Expr::Assign {
-                    name,
-                    expr: Box::new(rhs),
+            pratt::infix(
+                pratt::right(5),
+                just(Tok::Assign),
+                |lhs, _, rhs, _| match lhs {
+                    Expr::Id(name) => Expr::Assign {
+                        name,
+                        expr: Box::new(rhs),
+                    },
+                    other => Expr::Assign {
+                        name: "<non-id-lhs>".to_string(),
+                        expr: Box::new(Expr::Paren(Box::new(other))),
+                    },
                 },
-                other => Expr::Assign {
-                    name: "<non-id-lhs>".to_string(),
-                    expr: Box::new(Expr::Paren(Box::new(other))),
-                },
-            }),
+            ),
         ));
 
         // Make recursive closure output Clone by boxing :contentReference[oaicite:3]{index=3}
@@ -404,7 +419,12 @@ mod tests {
         let prog = parse_program(&toks).unwrap();
 
         match &prog.classes[0].features[0] {
-            Feature::Method { name, formals, ret_type, .. } => {
+            Feature::Method {
+                name,
+                formals,
+                ret_type,
+                ..
+            } => {
                 assert_eq!(name, "getValue");
                 assert_eq!(formals.len(), 0);
                 assert_eq!(ret_type, "Int");
@@ -450,12 +470,10 @@ mod tests {
         let prog = parse_program(&toks).unwrap();
 
         match &prog.classes[0].features[0] {
-            Feature::Method { body, .. } => {
-                match body {
-                    Expr::If { .. } => (),
-                    _ => panic!("Expected if expression"),
-                }
-            }
+            Feature::Method { body, .. } => match body {
+                Expr::If { .. } => (),
+                _ => panic!("Expected if expression"),
+            },
             _ => panic!("Expected method"),
         }
     }
@@ -474,12 +492,10 @@ mod tests {
         let prog = parse_program(&toks).unwrap();
 
         match &prog.classes[0].features[0] {
-            Feature::Method { body, .. } => {
-                match body {
-                    Expr::While { .. } => (),
-                    _ => panic!("Expected while expression"),
-                }
-            }
+            Feature::Method { body, .. } => match body {
+                Expr::While { .. } => (),
+                _ => panic!("Expected while expression"),
+            },
             _ => panic!("Expected method"),
         }
     }
@@ -496,12 +512,10 @@ mod tests {
         let prog = parse_program(&toks).unwrap();
 
         match &prog.classes[0].features[0] {
-            Feature::Method { body, .. } => {
-                match body {
-                    Expr::New(ty) => assert_eq!(ty, "Object"),
-                    _ => panic!("Expected new expression"),
-                }
-            }
+            Feature::Method { body, .. } => match body {
+                Expr::New(ty) => assert_eq!(ty, "Object"),
+                _ => panic!("Expected new expression"),
+            },
             _ => panic!("Expected method"),
         }
     }
@@ -537,18 +551,16 @@ mod tests {
         let prog = parse_program(&toks).unwrap();
 
         match &prog.classes[0].features[0] {
-            Feature::Method { body, .. } => {
-                match body {
-                    Expr::Case { arms, .. } => {
-                        assert_eq!(arms.len(), 3);
-                        assert_eq!(arms[0].name, "a");
-                        assert_eq!(arms[0].ty, "Int");
-                        assert_eq!(arms[1].name, "b");
-                        assert_eq!(arms[1].ty, "String");
-                    }
-                    _ => panic!("Expected case expression"),
+            Feature::Method { body, .. } => match body {
+                Expr::Case { arms, .. } => {
+                    assert_eq!(arms.len(), 3);
+                    assert_eq!(arms[0].name, "a");
+                    assert_eq!(arms[0].ty, "Int");
+                    assert_eq!(arms[1].name, "b");
+                    assert_eq!(arms[1].ty, "String");
                 }
-            }
+                _ => panic!("Expected case expression"),
+            },
             _ => panic!("Expected method"),
         }
     }
@@ -567,17 +579,15 @@ mod tests {
         let prog = parse_program(&toks).unwrap();
 
         match &prog.classes[0].features[0] {
-            Feature::Method { body, .. } => {
-                match body {
-                    Expr::Let { bindings, .. } => {
-                        assert_eq!(bindings.len(), 3);
-                        assert_eq!(bindings[0].name, "x");
-                        assert_eq!(bindings[1].name, "y");
-                        assert_eq!(bindings[2].name, "z");
-                    }
-                    _ => panic!("Expected let expression"),
+            Feature::Method { body, .. } => match body {
+                Expr::Let { bindings, .. } => {
+                    assert_eq!(bindings.len(), 3);
+                    assert_eq!(bindings[0].name, "x");
+                    assert_eq!(bindings[1].name, "y");
+                    assert_eq!(bindings[2].name, "z");
                 }
-            }
+                _ => panic!("Expected let expression"),
+            },
             _ => panic!("Expected method"),
         }
     }
@@ -596,15 +606,13 @@ mod tests {
         let prog = parse_program(&toks).unwrap();
 
         match &prog.classes[0].features[0] {
-            Feature::Method { body, .. } => {
-                match body {
-                    Expr::Let { bindings, .. } => {
-                        assert_eq!(bindings.len(), 1);
-                        assert!(bindings[0].init.is_none());
-                    }
-                    _ => panic!("Expected let expression"),
+            Feature::Method { body, .. } => match body {
+                Expr::Let { bindings, .. } => {
+                    assert_eq!(bindings.len(), 1);
+                    assert!(bindings[0].init.is_none());
                 }
-            }
+                _ => panic!("Expected let expression"),
+            },
             _ => panic!("Expected method"),
         }
     }
@@ -623,15 +631,17 @@ mod tests {
         let prog = parse_program(&toks).unwrap();
 
         match &prog.classes[0].features[0] {
-            Feature::Method { body, .. } => {
-                match body {
-                    Expr::Dispatch { static_type, method, .. } => {
-                        assert_eq!(static_type.as_deref(), Some("Object"));
-                        assert_eq!(method, "type_name");
-                    }
-                    _ => panic!("Expected dispatch expression"),
+            Feature::Method { body, .. } => match body {
+                Expr::Dispatch {
+                    static_type,
+                    method,
+                    ..
+                } => {
+                    assert_eq!(static_type.as_deref(), Some("Object"));
+                    assert_eq!(method, "type_name");
                 }
-            }
+                _ => panic!("Expected dispatch expression"),
+            },
             _ => panic!("Expected method"),
         }
     }
@@ -650,14 +660,12 @@ mod tests {
         let prog = parse_program(&toks).unwrap();
 
         match &prog.classes[0].features[0] {
-            Feature::Method { body, .. } => {
-                match body {
-                    Expr::Dispatch { method, .. } => {
-                        assert_eq!(method, "method3");
-                    }
-                    _ => panic!("Expected dispatch expression"),
+            Feature::Method { body, .. } => match body {
+                Expr::Dispatch { method, .. } => {
+                    assert_eq!(method, "method3");
                 }
-            }
+                _ => panic!("Expected dispatch expression"),
+            },
             _ => panic!("Expected method"),
         }
     }
@@ -677,15 +685,13 @@ mod tests {
         let prog = parse_program(&toks).unwrap();
 
         match &prog.classes[0].features[1] {
-            Feature::Method { body, .. } => {
-                match body {
-                    Expr::Dispatch { recv, method, .. } => {
-                        assert!(matches!(**recv, Expr::Self_));
-                        assert_eq!(method, "helper");
-                    }
-                    _ => panic!("Expected dispatch expression"),
+            Feature::Method { body, .. } => match body {
+                Expr::Dispatch { recv, method, .. } => {
+                    assert!(matches!(**recv, Expr::Self_));
+                    assert_eq!(method, "helper");
                 }
-            }
+                _ => panic!("Expected dispatch expression"),
+            },
             _ => panic!("Expected method"),
         }
     }
@@ -889,14 +895,12 @@ mod tests {
         let prog = parse_program(&toks).unwrap();
 
         match &prog.classes[0].features[0] {
-            Feature::Method { body, .. } => {
-                match body {
-                    Expr::Dispatch { args, .. } => {
-                        assert_eq!(args.len(), 3);
-                    }
-                    _ => panic!("Expected dispatch expression"),
+            Feature::Method { body, .. } => match body {
+                Expr::Dispatch { args, .. } => {
+                    assert_eq!(args.len(), 3);
                 }
-            }
+                _ => panic!("Expected dispatch expression"),
+            },
             _ => panic!("Expected method"),
         }
     }
@@ -995,14 +999,12 @@ mod tests {
         let prog = parse_program(&toks).unwrap();
 
         match &prog.classes[0].features[0] {
-            Feature::Method { body, .. } => {
-                match body {
-                    Expr::Dispatch { args, .. } => {
-                        assert_eq!(args.len(), 2);
-                    }
-                    _ => panic!("Expected dispatch expression"),
+            Feature::Method { body, .. } => match body {
+                Expr::Dispatch { args, .. } => {
+                    assert_eq!(args.len(), 2);
                 }
-            }
+                _ => panic!("Expected dispatch expression"),
+            },
             _ => panic!("Expected method"),
         }
     }

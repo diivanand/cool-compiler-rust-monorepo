@@ -1,17 +1,10 @@
 // Copyright 2025 Diivanand Ramalingam
 // Licensed under the Apache License, Version 2.0
 
-use cool_frontend::{
-    lex, parse_program, strip_comments, type_check_program,
-};
-use cool_codegen::{emit::emit_object, Codegen};
+use cool_codegen::{Codegen, emit::emit_object};
+use cool_frontend::{lex, parse_program, type_check_program};
 use inkwell::context::Context;
-use std::{
-    env,
-    fs,
-    path::PathBuf,
-    process::Command,
-};
+use std::{env, fs, path::PathBuf, process::Command};
 
 fn main() {
     if let Err(e) = run() {
@@ -29,8 +22,7 @@ fn run() -> Result<(), String> {
     // Combine input files
     let mut combined = String::new();
     for (i, path) in args.iter().enumerate() {
-        let src = fs::read_to_string(path)
-            .map_err(|e| format!("failed to read {path}: {e}"))?;
+        let src = fs::read_to_string(path).map_err(|e| format!("failed to read {path}: {e}"))?;
         if i > 0 {
             combined.push_str("\n\n");
         }
@@ -38,11 +30,8 @@ fn run() -> Result<(), String> {
     }
 
     // Frontend
-    let combined =
-        strip_comments(&combined).map_err(|e| format!("comment stripping failed: {e}"))?;
     let toks = lex(&combined).map_err(|e| format!("lexing failed: {e}"))?;
-    let prog = parse_program(&toks)
-        .map_err(|errs| format!("parse errors:\n{errs:?}"))?;
+    let prog = parse_program(&toks).map_err(|errs| format!("parse errors:\n{errs:?}"))?;
 
     if let Err(type_errors) = type_check_program(&prog) {
         let mut msg = String::from("type check errors:\n");
@@ -60,8 +49,7 @@ fn run() -> Result<(), String> {
 
     // Emit object
     let out_o = PathBuf::from("a.out.o");
-    emit_object(&cg.module, &out_o)
-        .map_err(|e| format!("failed to emit object: {e}"))?;
+    emit_object(&cg.module, &out_o).map_err(|e| format!("failed to emit object: {e}"))?;
 
     // Link with runtime
     let runtime_a = PathBuf::from("target/debug/libcool_runtime.a");

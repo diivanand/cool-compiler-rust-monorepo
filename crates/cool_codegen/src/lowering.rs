@@ -1,18 +1,18 @@
 // Copyright 2025 Diivanand Ramalingam
 // Licensed under the Apache License, Version 2.0
 
-use crate::abi;
 use crate::CodegenError;
+use crate::abi;
 use cool_frontend::{BinOp, Expr, Feature, Program};
+use inkwell::values::ValueKind;
 use inkwell::{
+    AddressSpace,
     builder::Builder,
     context::Context,
     module::Module,
     types::{FunctionType, StructType},
     values::{BasicMetadataValueEnum, FunctionValue, GlobalValue, PointerValue},
-    AddressSpace,
 };
-use inkwell::values::ValueKind;
 
 pub fn lower_program<'ctx>(
     ctx: &'ctx Context,
@@ -61,8 +61,15 @@ pub fn lower_program<'ctx>(
     // vtable structs (compiler convenience)
     let i32_ptr_ty = ctx.ptr_type(AddressSpace::default());
 
-    let vtable_int_ty =
-        ctx.struct_type(&[i32_ty.into(), i32_ty.into(), i32_ty.into(), i32_ptr_ty.into()], false);
+    let vtable_int_ty = ctx.struct_type(
+        &[
+            i32_ty.into(),
+            i32_ty.into(),
+            i32_ty.into(),
+            i32_ptr_ty.into(),
+        ],
+        false,
+    );
 
     let vtable_main_ty = ctx.struct_type(
         &[
@@ -172,10 +179,9 @@ fn call_returns_ptr_fn<'ctx>(
 
     match call.try_as_basic_value() {
         ValueKind::Basic(v) => Ok(v.into_pointer_value()),
-        ValueKind::Instruction(_) => Err(CodegenError::Llvm(format!(
-            "call `{}` returned void",
-            name
-        ))),
+        ValueKind::Instruction(_) => {
+            Err(CodegenError::Llvm(format!("call `{}` returned void", name)))
+        }
     }
 }
 
@@ -234,11 +240,7 @@ fn define_main_main<'ctx>(
 
     // typed cast for struct_gep (this triggers a deprecation warning; ok)
     let int_ptr = builder
-        .build_pointer_cast(
-            boxed_ptr,
-            optr_ty,
-            "int_ptr",
-        )
+        .build_pointer_cast(boxed_ptr, optr_ty, "int_ptr")
         .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
 
     // header = field 0
@@ -247,11 +249,7 @@ fn define_main_main<'ctx>(
         .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
 
     let hdr_ptr = builder
-        .build_pointer_cast(
-            hdr_gep,
-            optr_ty,
-            "hdr_ptr",
-        )
+        .build_pointer_cast(hdr_gep, optr_ty, "hdr_ptr")
         .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
 
     // header.vtable = field 0
@@ -341,11 +339,7 @@ fn define_c_main<'ctx>(
 
     // cast to Main* for struct gep
     let main_ptr = builder
-        .build_pointer_cast(
-            main_obj,
-            optr_ty,
-            "main_ptr",
-        )
+        .build_pointer_cast(main_obj, optr_ty, "main_ptr")
         .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
 
     // header ptr
@@ -353,11 +347,7 @@ fn define_c_main<'ctx>(
         .build_struct_gep(*main_obj_ty, main_ptr, 0, "main_hdr_gep")
         .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
     let hdr_ptr = builder
-        .build_pointer_cast(
-            hdr_gep,
-            optr_ty,
-            "main_hdr_ptr",
-        )
+        .build_pointer_cast(hdr_gep, optr_ty, "main_hdr_ptr")
         .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
 
     // load header.vtable
@@ -370,11 +360,7 @@ fn define_c_main<'ctx>(
         .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
 
     let vt_main_ptr = builder
-        .build_pointer_cast(
-            vtable_loaded.into_pointer_value(),
-            optr_ty,
-            "vt_main_ptr",
-        )
+        .build_pointer_cast(vtable_loaded.into_pointer_value(), optr_ty, "vt_main_ptr")
         .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
 
     // slot0: field 4
@@ -403,11 +389,7 @@ fn define_c_main<'ctx>(
 
     // unbox
     let int_ptr = builder
-        .build_pointer_cast(
-            boxed_int,
-            optr_ty,
-            "int_ptr",
-        )
+        .build_pointer_cast(boxed_int, optr_ty, "int_ptr")
         .map_err(|e| CodegenError::Llvm(format!("{e:?}")))?;
 
     let val_gep = builder
