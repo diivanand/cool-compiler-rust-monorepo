@@ -59,14 +59,17 @@ struct ClassInfo {
 #[derive(Clone, Debug)]
 pub struct TypeContext {
     classes: HashMap<String, ClassInfo>,
+    inheritance_cache: HashMap<String, Vec<String>>, // cached chains from class -> Object
 }
 
 impl TypeContext {
     pub fn new() -> Self {
         let mut ctx = TypeContext {
             classes: HashMap::new(),
+            inheritance_cache: HashMap::new(),
         };
         ctx.install_builtins();
+        ctx.rebuild_inheritance_cache();
         ctx
     }
 
@@ -117,15 +120,20 @@ impl TypeContext {
         let a = self.resolve_self_type(a, current_class);
         let b = self.resolve_self_type(b, current_class);
 
-        let Some(a_name) = a.as_named() else { return false };
-        let Some(b_name) = b.as_named() else { return false };
+        let Some(a_name) = a.as_named() else {
+            return false;
+        };
+        let Some(b_name) = b.as_named() else {
+            return false;
+        };
 
         if a_name == b_name {
             return true;
         }
 
-        // Use inheritance_chain helper to check if b_name is in a's ancestors
-        self.inheritance_chain(a_name).contains(&b_name.to_string())
+        self.inheritance_chain(a_name)
+            .iter()
+            .any(|ancestor| ancestor == b_name)
     }
 
     /// LUB / join: closest common ancestor.
@@ -133,19 +141,26 @@ impl TypeContext {
         let a = self.resolve_self_type(a, current_class);
         let b = self.resolve_self_type(b, current_class);
 
-        let Some(a0) = a.as_named() else { return CoolType::named(OBJECT) };
-        let Some(b0) = b.as_named() else { return CoolType::named(OBJECT) };
+        let Some(a0) = a.as_named() else {
+            return CoolType::named(OBJECT);
+        };
+        let Some(b0) = b.as_named() else {
+            return CoolType::named(OBJECT);
+        };
 
         if a0 == b0 {
             return CoolType::named(a0);
         }
 
-        // Use inheritance_chain helper - collect ancestors of a0 into a set
-        let ancestors: BTreeSet<String> = self.inheritance_chain(a0).into_iter().collect();
+        let ancestors: BTreeSet<&str> = self
+            .inheritance_chain(a0)
+            .iter()
+            .map(String::as_str)
+            .collect();
 
         // Walk b0's chain and find first common ancestor
-        for ancestor in self.inheritance_chain(b0) {
-            if ancestors.contains(&ancestor) {
+        for ancestor in self.inheritance_chain(b0).iter().map(String::as_str) {
+            if ancestors.contains(ancestor) {
                 return CoolType::named(ancestor);
             }
         }
@@ -169,20 +184,35 @@ impl TypeContext {
 
     /// Walks the inheritance chain from a given class to Object, returning each class name.
     /// Returns an iterator-like vector starting from the given class and ending at Object.
-    fn inheritance_chain(&self, class: &str) -> Vec<String> {
-        let mut chain = Vec::new();
-        let mut cur = class.to_string();
-        loop {
-            chain.push(cur.clone());
-            let Some(info) = self.classes.get(&cur) else {
-                break;
-            };
-            if info.parent == cur {
-                break;
+    fn inheritance_chain(&self, class: &str) -> &[String] {
+        self.inheritance_cache
+            .get(class)
+            .map(|c| c.as_slice())
+            .unwrap_or(&[])
+    }
+
+    fn rebuild_inheritance_cache(&mut self) {
+        self.inheritance_cache.clear();
+
+        for class in self.classes.keys() {
+            let mut chain = Vec::new();
+            let mut cur: &str = class.as_str();
+
+            loop {
+                chain.push(cur.to_string());
+                let Some(info) = self.classes.get(cur) else {
+                    break;
+                };
+
+                if info.parent == cur {
+                    break;
+                }
+
+                cur = info.parent.as_str();
             }
-            cur = info.parent.clone();
+
+            self.inheritance_cache.insert(class.clone(), chain);
         }
-        chain
     }
 }
 
@@ -235,6 +265,7 @@ pub fn type_check_program(p: &Program) -> Result<(), Vec<TypeError>> {
     let mut ctx = TypeContext::new();
 
     install_user_class_headers(&mut ctx, p, &mut errors);
+    ctx.rebuild_inheritance_cache();
     validate_inheritance(&ctx, &mut errors);
     install_features_and_check(&ctx, p, &mut errors);
 
@@ -250,7 +281,9 @@ fn install_user_class_headers(ctx: &mut TypeContext, p: &Program, errors: &mut V
         let name = c.name.as_str();
 
         if ctx.has_class(name) {
-            errors.push(TypeError::new(format!("Duplicate class definition: {name}")));
+            errors.push(TypeError::new(format!(
+                "Duplicate class definition: {name}"
+            )));
             continue;
         }
 
@@ -442,11 +475,12 @@ fn install_features_and_check(ctx: &TypeContext, p: &Program, errors: &mut Vec<T
                 Feature::Attr { name, ty, init } => {
                     if let Some(init_expr) = init {
                         let declared = parse_ty_name(ty);
-                        let t_init = type_of_expr(&ctx2, &mut o.clone(), cname, init_expr, errors);
+                        let t_init = type_of_expr(&ctx2, &mut o, cname, init_expr, errors);
                         if !ctx2.conforms(&t_init, &declared, cname) {
                             errors.push(TypeError::new(format!(
                                 "Attribute init type does not conform: {cname}.{name} : {} <- {}",
-                                declared.as_named().unwrap_or("").to_string(), t_init.as_named().unwrap_or("").to_string()
+                                declared.as_named().unwrap_or("").to_string(),
+                                t_init.as_named().unwrap_or("").to_string()
                             )));
                         }
                     }
@@ -458,13 +492,13 @@ fn install_features_and_check(ctx: &TypeContext, p: &Program, errors: &mut Vec<T
                     ret_type,
                     body,
                 } => {
-                    let mut o2 = o.clone();
-                    o2.push();
+                    o.push();
                     for f in formals {
-                        o2.insert(f.name.clone(), parse_ty_name(&f.ty));
+                        o.insert(f.name.clone(), parse_ty_name(&f.ty));
                     }
 
-                    let body_ty = type_of_expr(&ctx2, &mut o2, cname, body, errors);
+                    let body_ty = type_of_expr(&ctx2, &mut o, cname, body, errors);
+                    o.pop();
                     let declared_ret = parse_ty_name(ret_type);
 
                     if !ctx2.conforms(&body_ty, &declared_ret, cname) {
@@ -482,8 +516,8 @@ fn install_features_and_check(ctx: &TypeContext, p: &Program, errors: &mut Vec<T
 fn add_all_attrs_to_env(ctx: &TypeContext, class: &str, env: &mut ObjEnv) {
     // Use inheritance_chain helper and reverse to go from Object down to current class
     let chain = ctx.inheritance_chain(class);
-    for c in chain.into_iter().rev() {
-        if let Some(info) = ctx.classes.get(&c) {
+    for c in chain.iter().rev() {
+        if let Some(info) = ctx.classes.get(c) {
             for (k, v) in &info.attrs {
                 env.insert(k.clone(), v.clone());
             }
@@ -529,7 +563,8 @@ fn type_of_expr(
             if !ctx.conforms(&t_rhs, &t_var, current_class) {
                 errors.push(TypeError::new(format!(
                     "Type mismatch in assignment '{name} <- ...': rhs {} does not conform to {}",
-                    t_rhs.as_named().unwrap_or("").to_string(), t_var.as_named().unwrap_or("").to_string()
+                    t_rhs.as_named().unwrap_or("").to_string(),
+                    t_var.as_named().unwrap_or("").to_string()
                 )));
             }
             t_rhs
@@ -586,7 +621,9 @@ fn type_of_expr(
                     if !ctx.conforms(&t_init, &declared, current_class) {
                         errors.push(TypeError::new(format!(
                             "Let init type mismatch for {} : {} <- {}",
-                            b.name, declared.as_named().unwrap_or("").to_string(), t_init.as_named().unwrap_or("").to_string()
+                            b.name,
+                            declared.as_named().unwrap_or("").to_string(),
+                            t_init.as_named().unwrap_or("").to_string()
                         )));
                     }
                 }
@@ -648,7 +685,10 @@ fn type_of_expr(
         Expr::Not(inner) => {
             let t = type_of_expr(ctx, o, current_class, inner, errors);
             if ctx.resolve_self_type(&t, current_class) != CoolType::named(BOOL) {
-                errors.push(TypeError::new(format!("'not' expects Bool, got {}", t.as_named().unwrap_or("").to_string())));
+                errors.push(TypeError::new(format!(
+                    "'not' expects Bool, got {}",
+                    t.as_named().unwrap_or("").to_string()
+                )));
             }
             CoolType::named(BOOL)
         }
@@ -656,7 +696,10 @@ fn type_of_expr(
         Expr::Neg(inner) => {
             let t = type_of_expr(ctx, o, current_class, inner, errors);
             if ctx.resolve_self_type(&t, current_class) != CoolType::named(INT) {
-                errors.push(TypeError::new(format!("'~' expects Int, got {}", t.as_named().unwrap_or("").to_string())));
+                errors.push(TypeError::new(format!(
+                    "'~' expects Int, got {}",
+                    t.as_named().unwrap_or("").to_string()
+                )));
             }
             CoolType::named(INT)
         }
@@ -671,24 +714,22 @@ fn type_of_expr(
 
             match op {
                 BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => {
-                    if tl_resolved != CoolType::named(INT)
-                        || tr_resolved != CoolType::named(INT)
-                    {
+                    if tl_resolved != CoolType::named(INT) || tr_resolved != CoolType::named(INT) {
                         errors.push(TypeError::new(format!(
                             "Arithmetic op expects Int/Int, got {} and {}",
-                            tl.as_named().unwrap_or("").to_string(), tr.as_named().unwrap_or("").to_string()
+                            tl.as_named().unwrap_or("").to_string(),
+                            tr.as_named().unwrap_or("").to_string()
                         )));
                     }
                     CoolType::named(INT)
                 }
 
                 BinOp::Lt | BinOp::Le => {
-                    if tl_resolved != CoolType::named(INT)
-                        || tr_resolved != CoolType::named(INT)
-                    {
+                    if tl_resolved != CoolType::named(INT) || tr_resolved != CoolType::named(INT) {
                         errors.push(TypeError::new(format!(
                             "Comparison op expects Int/Int, got {} and {}",
-                            tl.as_named().unwrap_or("").to_string(), tr.as_named().unwrap_or("").to_string()
+                            tl.as_named().unwrap_or("").to_string(),
+                            tr.as_named().unwrap_or("").to_string()
                         )));
                     }
                     CoolType::named(BOOL)
@@ -715,7 +756,8 @@ fn type_of_expr(
                     } else if basic(&tl_resolved).is_some() || basic(&tr_resolved).is_some() {
                         errors.push(TypeError::new(format!(
                             "Illegal equality test between {} and {}",
-                            tl_resolved.as_named().unwrap_or(""), tr_resolved.as_named().unwrap_or("")
+                            tl_resolved.as_named().unwrap_or(""),
+                            tr_resolved.as_named().unwrap_or("")
                         )));
                     }
 
@@ -741,7 +783,9 @@ fn type_of_expr(
             // Determine dispatch class, avoiding redundant clones
             let dispatch_class = match static_type {
                 Some(st) if !ctx.has_class(st) => {
-                    errors.push(TypeError::new(format!("Unknown static dispatch type @{st}")));
+                    errors.push(TypeError::new(format!(
+                        "Unknown static dispatch type @{st}"
+                    )));
                     recv_class
                 }
                 Some(st) => {
@@ -749,7 +793,8 @@ fn type_of_expr(
                     if !ctx.conforms(&t0, &st_ty, current_class) {
                         errors.push(TypeError::new(format!(
                             "Static dispatch requires receiver type {} to conform to {}",
-                            t0.as_named().unwrap_or("").to_string(), st
+                            t0.as_named().unwrap_or("").to_string(),
+                            st
                         )));
                     }
                     st.clone()
@@ -831,7 +876,10 @@ mod tests {
         let res = type_check_program(&prog);
         assert!(res.is_err());
         let errs = res.err().unwrap();
-        assert!(errs.iter().any(|e| e.msg.contains("If condition must be Bool")));
+        assert!(
+            errs.iter()
+                .any(|e| e.msg.contains("If condition must be Bool"))
+        );
     }
 
     #[test]
@@ -993,7 +1041,10 @@ mod tests {
         let res = type_check_program(&prog);
         assert!(res.is_err());
         let errs = res.err().unwrap();
-        assert!(errs.iter().any(|e| e.msg.contains("Unknown static dispatch type")));
+        assert!(
+            errs.iter()
+                .any(|e| e.msg.contains("Unknown static dispatch type"))
+        );
     }
 
     #[test]
@@ -1065,4 +1116,3 @@ mod tests {
         assert!(errs.iter().any(|e| e.msg.contains("Illegal equality test")));
     }
 }
-
