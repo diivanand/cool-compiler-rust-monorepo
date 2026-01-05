@@ -2,9 +2,9 @@
 // Licensed under the Apache License, Version 2.0
 
 use inkwell::{
+    OptimizationLevel,
     module::Module,
     targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetTriple},
-    OptimizationLevel,
 };
 use std::path::Path;
 

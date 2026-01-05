@@ -240,7 +240,10 @@ mod tests {
         let toks = lex("class Main inherits Object { x : Int <- 1; };").unwrap();
         assert!(toks.contains(&Tok::KwClass));
         assert!(toks.contains(&Tok::KwInherits));
-        assert!(toks.iter().any(|t| matches!(t, Tok::TypeId(s) if s == "Main")));
+        assert!(
+            toks.iter()
+                .any(|t| matches!(t, Tok::TypeId(s) if s == "Main"))
+        );
         assert!(toks.iter().any(|t| matches!(t, Tok::ObjId(s) if s == "x")));
         assert!(toks.iter().any(|t| matches!(t, Tok::Int(1))));
     }
@@ -272,13 +275,19 @@ mod tests {
     #[test]
     fn lex_string_with_escape_sequences() {
         let toks = lex(r#""hello\n\t\b\f\\\"world""#).unwrap();
-        assert!(toks.iter().any(|t| matches!(t, Tok::Str(s) if s == "hello\n\t\u{0008}\u{000C}\\\"world")));
+        assert!(
+            toks.iter()
+                .any(|t| matches!(t, Tok::Str(s) if s == "hello\n\t\u{0008}\u{000C}\\\"world"))
+        );
     }
 
     #[test]
     fn lex_string_basic() {
         let toks = lex(r#""simple string""#).unwrap();
-        assert!(toks.iter().any(|t| matches!(t, Tok::Str(s) if s == "simple string")));
+        assert!(
+            toks.iter()
+                .any(|t| matches!(t, Tok::Str(s) if s == "simple string"))
+        );
     }
 
     #[test]
@@ -292,10 +301,22 @@ mod tests {
     #[test]
     fn lex_type_id_vs_obj_id() {
         let toks = lex("MyClass myObject AnotherType another_var").unwrap();
-        assert!(toks.iter().any(|t| matches!(t, Tok::TypeId(s) if s == "MyClass")));
-        assert!(toks.iter().any(|t| matches!(t, Tok::ObjId(s) if s == "myObject")));
-        assert!(toks.iter().any(|t| matches!(t, Tok::TypeId(s) if s == "AnotherType")));
-        assert!(toks.iter().any(|t| matches!(t, Tok::ObjId(s) if s == "another_var")));
+        assert!(
+            toks.iter()
+                .any(|t| matches!(t, Tok::TypeId(s) if s == "MyClass"))
+        );
+        assert!(
+            toks.iter()
+                .any(|t| matches!(t, Tok::ObjId(s) if s == "myObject"))
+        );
+        assert!(
+            toks.iter()
+                .any(|t| matches!(t, Tok::TypeId(s) if s == "AnotherType"))
+        );
+        assert!(
+            toks.iter()
+                .any(|t| matches!(t, Tok::ObjId(s) if s == "another_var"))
+        );
     }
 
     #[test]
@@ -307,7 +328,8 @@ mod tests {
 
     #[test]
     fn lex_all_keywords_various_cases() {
-        let src = "ClAsS iNhErItS IF tHeN eLsE fI wHiLe LoOp PoOl LeT iN CaSe Of EsAc NeW iSvOiD nOt";
+        let src =
+            "ClAsS iNhErItS IF tHeN eLsE fI wHiLe LoOp PoOl LeT iN CaSe Of EsAc NeW iSvOiD nOt";
         let toks = lex(src).unwrap();
         assert!(toks.contains(&Tok::KwClass));
         assert!(toks.contains(&Tok::KwInherits));
@@ -337,7 +359,10 @@ mod tests {
         // False (capital F) should NOT be KwFalse, should be TypeId
         let toks = lex("False").unwrap();
         assert!(!toks.contains(&Tok::KwFalse));
-        assert!(toks.iter().any(|t| matches!(t, Tok::TypeId(s) if s == "False")));
+        assert!(
+            toks.iter()
+                .any(|t| matches!(t, Tok::TypeId(s) if s == "False"))
+        );
     }
 
     #[test]
@@ -349,7 +374,10 @@ mod tests {
         // True (capital T) should NOT be KwTrue, should be TypeId
         let toks = lex("True").unwrap();
         assert!(!toks.contains(&Tok::KwTrue));
-        assert!(toks.iter().any(|t| matches!(t, Tok::TypeId(s) if s == "True")));
+        assert!(
+            toks.iter()
+                .any(|t| matches!(t, Tok::TypeId(s) if s == "True"))
+        );
     }
 
     #[test]
@@ -414,17 +442,29 @@ mod tests {
     #[test]
     fn lex_identifiers_with_underscores_and_numbers() {
         let toks = lex("my_var_123 MyClass_456 x1 Y2").unwrap();
-        assert!(toks.iter().any(|t| matches!(t, Tok::ObjId(s) if s == "my_var_123")));
-        assert!(toks.iter().any(|t| matches!(t, Tok::TypeId(s) if s == "MyClass_456")));
+        assert!(
+            toks.iter()
+                .any(|t| matches!(t, Tok::ObjId(s) if s == "my_var_123"))
+        );
+        assert!(
+            toks.iter()
+                .any(|t| matches!(t, Tok::TypeId(s) if s == "MyClass_456"))
+        );
         assert!(toks.iter().any(|t| matches!(t, Tok::ObjId(s) if s == "x1")));
-        assert!(toks.iter().any(|t| matches!(t, Tok::TypeId(s) if s == "Y2")));
+        assert!(
+            toks.iter()
+                .any(|t| matches!(t, Tok::TypeId(s) if s == "Y2"))
+        );
     }
 
     #[test]
     fn lex_whitespace_handling() {
         let toks = lex("  class  \t\n Main\r\n  {  }  ;  ").unwrap();
         assert!(toks.contains(&Tok::KwClass));
-        assert!(toks.iter().any(|t| matches!(t, Tok::TypeId(s) if s == "Main")));
+        assert!(
+            toks.iter()
+                .any(|t| matches!(t, Tok::TypeId(s) if s == "Main"))
+        );
         assert!(toks.contains(&Tok::LBrace));
         assert!(toks.contains(&Tok::RBrace));
         assert!(toks.contains(&Tok::Semi));
@@ -449,36 +489,63 @@ mod tests {
     #[test]
     fn lex_dispatch_expression() {
         let toks = lex("obj.method(arg1, arg2)").unwrap();
-        assert!(toks.iter().any(|t| matches!(t, Tok::ObjId(s) if s == "obj")));
+        assert!(
+            toks.iter()
+                .any(|t| matches!(t, Tok::ObjId(s) if s == "obj"))
+        );
         assert!(toks.contains(&Tok::Dot));
-        assert!(toks.iter().any(|t| matches!(t, Tok::ObjId(s) if s == "method")));
+        assert!(
+            toks.iter()
+                .any(|t| matches!(t, Tok::ObjId(s) if s == "method"))
+        );
         assert!(toks.contains(&Tok::LParen));
-        assert!(toks.iter().any(|t| matches!(t, Tok::ObjId(s) if s == "arg1")));
+        assert!(
+            toks.iter()
+                .any(|t| matches!(t, Tok::ObjId(s) if s == "arg1"))
+        );
         assert!(toks.contains(&Tok::Comma));
-        assert!(toks.iter().any(|t| matches!(t, Tok::ObjId(s) if s == "arg2")));
+        assert!(
+            toks.iter()
+                .any(|t| matches!(t, Tok::ObjId(s) if s == "arg2"))
+        );
         assert!(toks.contains(&Tok::RParen));
     }
 
     #[test]
     fn lex_static_dispatch_expression() {
         let toks = lex("obj@Type.method()").unwrap();
-        assert!(toks.iter().any(|t| matches!(t, Tok::ObjId(s) if s == "obj")));
+        assert!(
+            toks.iter()
+                .any(|t| matches!(t, Tok::ObjId(s) if s == "obj"))
+        );
         assert!(toks.contains(&Tok::At));
-        assert!(toks.iter().any(|t| matches!(t, Tok::TypeId(s) if s == "Type")));
+        assert!(
+            toks.iter()
+                .any(|t| matches!(t, Tok::TypeId(s) if s == "Type"))
+        );
         assert!(toks.contains(&Tok::Dot));
-        assert!(toks.iter().any(|t| matches!(t, Tok::ObjId(s) if s == "method")));
+        assert!(
+            toks.iter()
+                .any(|t| matches!(t, Tok::ObjId(s) if s == "method"))
+        );
     }
 
     #[test]
     fn lex_empty_string() {
         let toks = lex(r#""""#).unwrap();
-        assert!(toks.iter().any(|t| matches!(t, Tok::Str(s) if s.is_empty())));
+        assert!(
+            toks.iter()
+                .any(|t| matches!(t, Tok::Str(s) if s.is_empty()))
+        );
     }
 
     #[test]
     fn lex_string_with_spaces() {
         let toks = lex(r#""hello world foo bar""#).unwrap();
-        assert!(toks.iter().any(|t| matches!(t, Tok::Str(s) if s == "hello world foo bar")));
+        assert!(
+            toks.iter()
+                .any(|t| matches!(t, Tok::Str(s) if s == "hello world foo bar"))
+        );
     }
 
     #[test]
@@ -492,8 +559,14 @@ mod tests {
         "#;
         let toks = lex(src).unwrap();
         assert!(toks.contains(&Tok::KwClass));
-        assert!(toks.iter().any(|t| matches!(t, Tok::TypeId(s) if s == "Main")));
+        assert!(
+            toks.iter()
+                .any(|t| matches!(t, Tok::TypeId(s) if s == "Main"))
+        );
         assert!(toks.iter().any(|t| matches!(t, Tok::ObjId(s) if s == "x")));
-        assert!(toks.iter().any(|t| matches!(t, Tok::TypeId(s) if s == "Int")));
+        assert!(
+            toks.iter()
+                .any(|t| matches!(t, Tok::TypeId(s) if s == "Int"))
+        );
     }
 }

@@ -25,7 +25,7 @@ pub struct ObjHeader {
     pub size_bytes: u32,       // total object size
     pub marked: u8,            // mark bit for GC
     pub _pad0: [u8; 3],
-    pub tag: u32,              // class tag / type id
+    pub tag: u32, // class tag / type id
 }
 
 struct HeapState {

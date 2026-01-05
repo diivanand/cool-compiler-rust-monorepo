@@ -6,6 +6,9 @@
 # having git ignore such leftovers. You can use `.git/info/exclude` to
 # configure your local ignore list.
 
+*.out
+*.out.o
+
 ## File system
 .DS_Store
 desktop.ini
