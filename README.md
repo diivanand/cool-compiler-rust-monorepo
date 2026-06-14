@@ -143,6 +143,11 @@ cool-compiler-rust-monorepo/
 │   └── coolc/
 │       └── src/main.rs         # Full compiler driver
 │
+├── examples/                   # Sample .cl programs
+├── tests/
+│   └── e2e/                    # Python (uv + pytest) end-to-end tests of ./coolc
+│
+├── ARCHITECTURE.md             # Guided tour: concepts ↔ code
 ├── LICENSE.md                  # Apache 2.0 license
 ├── NOTICE.md                   # Attribution notice
 └── README.md
@@ -203,6 +208,21 @@ files; they are concatenated into one program.
 > the whole pipeline (object model, vtable dispatch, allocation, GC, linking) end
 > to end. Generalizing lowering to all classes/expressions is the active frontier.
 > The frontend and type checker handle the full language.
+
+### End-to-end tests (Python)
+
+In addition to the Rust unit/integration tests (`cargo test --workspace`), there is a
+black-box e2e suite that actually compiles `.cl` files with `coolc`, runs the resulting
+native binary, and checks its output. It uses **[uv](https://docs.astral.sh/uv/)** +
+pytest and auto-builds the Rust binaries:
+
+```bash
+cd tests/e2e
+uv run pytest -v
+```
+
+The suite runs on Apple Silicon macOS and is skipped elsewhere. See
+[`tests/e2e/README.md`](tests/e2e/README.md) for details.
 
 ---
 

@@ -1,0 +1,15 @@
+[project]
+name = "coolc-e2e"
+version = "0.0.0"
+description = "End-to-end tests that compile and run COOL programs with the coolc executable"
+requires-python = ">=3.11"
+# No runtime dependencies: the tests only drive the `coolc` binary via subprocess.
+dependencies = []
+
+[dependency-groups]
+# `uv run pytest` installs the default groups (including `dev`) automatically.
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["."]
+addopts = "-ra"

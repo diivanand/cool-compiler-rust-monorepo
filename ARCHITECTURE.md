@@ -510,6 +510,24 @@ Putting it all together for `class Main { main() : Int { 1 + 2 * 3 } }`:
 | Link | `clang` links object + `libcool_runtime.a` → `./a.out` | `coolc::run` |
 | Run | `./a.out` prints `7` | `cool_rt_print_int` → `write_all_stdout` |
 
+### Testing the pipeline end-to-end
+
+The trace above is exactly what the **`tests/e2e/`** suite verifies automatically. It
+is a black-box Python (uv + pytest) harness that runs the real `coolc` binary, links the
+runtime, executes the produced `./a.out`, and asserts its output — covering every arrow
+in the [§1 pipeline diagram](#1-the-big-picture), through to the running native program.
+This complements the in-process Rust tests (e.g. `crates/cool_codegen/tests/codegen_smoke.rs`),
+which stop at IR verification and never link or run anything.
+
+Because the backend currently lowers only a `Main.main` whose body is an integer
+expression over `+ - * /`, the suite asserts that `examples/test.cl` runs and prints `7`
+(plus every program in `examples/arithmetic/`, each checked against its `.expected`
+sibling), while `examples/hello.cl` (block body) and
+`examples/bad.cl` (ill-typed `if`) are expected to fail compilation. Those
+expected-failure tests double as living documentation of the codegen subset's current
+boundary. The suite targets `aarch64-apple-darwin` and is skipped on other hosts. See
+[`tests/e2e/README.md`](tests/e2e/README.md).
+
 ---
 
 ## 10. Concept → code quick reference
@@ -526,3 +544,4 @@ Putting it all together for `class Main { main() : Int { 1 + 2 * 3 } }`:
 | garbage collection | `cool_runtime/src/gc.rs` — `alloc`, `collect`, `mark_obj` |
 | how output reaches the terminal | `cool_runtime/src/rt_print.rs` — `write_all_stdout` |
 | the end-to-end driver | `crates/coolc/src/main.rs` — `run` |
+| how the whole pipeline is tested by running real binaries | `tests/e2e/` — `conftest.py`, `test_examples.py`, `test_arithmetic.py` |
