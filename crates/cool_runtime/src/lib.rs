@@ -1,6 +1,18 @@
 // Copyright 2025 Diivanand Ramalingam
 // Licensed under the Apache License, Version 2.0
 
+//! `cool_runtime` — the small support library every compiled COOL program links
+//! against. It is built as a `staticlib` (see `Cargo.toml`) so the C `main` that
+//! codegen emits can call directly into it.
+//!
+//! It provides two services:
+//! - a [garbage collector](gc) for heap object allocation and reclamation, and
+//! - [I/O primitives](rt_print) backing COOL's `out_int` / `out_string`.
+//!
+//! Everything the generated code calls is exported below as `extern "C"` with a
+//! stable, unmangled name. Those names are the ABI; they must match the
+//! declarations in `cool_codegen::abi`.
+
 mod gc;
 mod rt_print;
 

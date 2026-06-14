@@ -1,9 +1,35 @@
+//! Static type checker — implements COOL's semantic rules (manual §12).
+//!
+//! Where the lexer and parser only care about *shape*, the type checker is the
+//! first stage that understands *meaning*: it builds a table of all classes,
+//! validates the inheritance hierarchy, and then assigns a type to every
+//! expression, reporting a `TypeError` whenever the rules are violated.
+//!
+//! ## Key concepts (the formal "judgements" from the manual, in plain terms)
+//!
+//! - **Conformance (`≤`)**: `A ≤ B` means an `A` can be used wherever a `B` is
+//!   expected — i.e. `A` is `B` or a descendant of it. See [`TypeContext::conforms`].
+//! - **Least Upper Bound (LUB / join)**: the most specific common ancestor of
+//!   two types, used to type `if`/`case` whose branches differ. See [`TypeContext::lub`].
+//! - **`SELF_TYPE`**: a type that stands for "the class of `self`", which is only
+//!   known relative to the current class. We carry it as its own [`CoolType`]
+//!   variant and resolve it on demand via [`TypeContext::resolve_self_type`].
+//!
+//! ## How errors are collected
+//!
+//! Rather than stopping at the first problem, the checker threads a
+//! `&mut Vec<TypeError>` through the whole walk and keeps going, substituting a
+//! best-guess type (often `Object`) after an error so later code can still be
+//! analyzed. This lets a single run report *many* errors — far friendlier than
+//! fix-one-recompile-repeat.
+
 use std::collections::{BTreeSet, HashMap};
+use std::fmt;
 
 use crate::ast::*;
 
-/// COOL has special type SELF_TYPE which depends on the current class.
-/// We'll represent types as either a concrete class name or SELF_TYPE.
+/// A COOL type, as understood by the checker. Either a concrete class name or
+/// the special `SELF_TYPE`, whose meaning depends on the enclosing class.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum CoolType {
     Named(String),
@@ -11,14 +37,27 @@ pub enum CoolType {
 }
 
 impl CoolType {
+    /// Convenience constructor: `CoolType::named("Int")`.
     pub fn named<S: Into<String>>(s: S) -> Self {
         CoolType::Named(s.into())
     }
 
+    /// The underlying class name, or `None` for the unresolved `SELF_TYPE`.
     pub fn as_named(&self) -> Option<&str> {
         match self {
             CoolType::Named(s) => Some(s.as_str()),
             CoolType::SelfType => None,
+        }
+    }
+}
+
+/// Human-friendly rendering used throughout error messages, so we can write
+/// `"... got {ty}"` instead of repeatedly unwrapping the name by hand.
+impl fmt::Display for CoolType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CoolType::Named(s) => f.write_str(s),
+            CoolType::SelfType => f.write_str("SELF_TYPE"),
         }
     }
 }
@@ -55,14 +94,27 @@ struct ClassInfo {
     methods: HashMap<String, MethodSig>,
 }
 
-/// Global type context with class table + inheritance.
+/// The global type environment.
+///
+/// `classes` is the *class table*: every class (built-in and user-defined)
+/// mapped to its parent, attributes, and method signatures. `inheritance_cache`
+/// memoizes each class's chain up to `Object` so conformance/LUB queries — which
+/// happen constantly during checking — don't re-walk the hierarchy every time.
 #[derive(Clone, Debug)]
 pub struct TypeContext {
     classes: HashMap<String, ClassInfo>,
     inheritance_cache: HashMap<String, Vec<String>>, // cached chains from class -> Object
 }
 
+impl Default for TypeContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TypeContext {
+    /// Build a fresh context pre-populated with COOL's built-in classes
+    /// (`Object`, `IO`, `Int`, `Bool`, `String`).
     pub fn new() -> Self {
         let mut ctx = TypeContext {
             classes: HashMap::new(),
@@ -191,6 +243,9 @@ impl TypeContext {
             .unwrap_or(&[])
     }
 
+    /// Recompute every class's ancestry chain (`[Self, Parent, ..., Object]`).
+    /// Must be called after the class table changes (e.g. once user classes are
+    /// installed). `Object` is its own parent, which is the loop's stop condition.
     fn rebuild_inheritance_cache(&mut self) {
         self.inheritance_cache.clear();
 
@@ -216,7 +271,12 @@ impl TypeContext {
     }
 }
 
-/// Scoped object environment O(v)=T.
+/// The object (variable) environment, written `O` in the manual's rules: it maps
+/// identifiers in scope to their types.
+///
+/// It's a *stack of scopes*. Entering a `let`, `case` arm, or method body pushes
+/// a fresh scope; leaving pops it. Lookups search innermost-first, so an inner
+/// binding correctly *shadows* an outer one with the same name.
 #[derive(Clone, Debug)]
 struct ObjEnv {
     scopes: Vec<HashMap<String, CoolType>>,
@@ -229,18 +289,23 @@ impl ObjEnv {
         }
     }
 
+    /// Enter a new, empty scope.
     fn push(&mut self) {
         self.scopes.push(HashMap::new());
     }
 
+    /// Leave the innermost scope, discarding its bindings.
     fn pop(&mut self) {
         self.scopes.pop();
     }
 
+    /// Bind `name : ty` in the innermost scope. (`last_mut().unwrap()` is safe
+    /// because we always keep at least one scope on the stack.)
     fn insert(&mut self, name: String, ty: CoolType) {
         self.scopes.last_mut().unwrap().insert(name, ty);
     }
 
+    /// Look up `name`, searching from the innermost scope outward.
     fn get(&self, name: &str) -> Option<CoolType> {
         for s in self.scopes.iter().rev() {
             if let Some(t) = s.get(name) {
@@ -251,6 +316,8 @@ impl ObjEnv {
     }
 }
 
+/// Turn a raw type name from the AST into a [`CoolType`], recognizing the
+/// `SELF_TYPE` keyword as the special variant.
 fn parse_ty_name(ty: &str) -> CoolType {
     if ty == "SELF_TYPE" {
         CoolType::SelfType
@@ -259,7 +326,17 @@ fn parse_ty_name(ty: &str) -> CoolType {
     }
 }
 
-/// Public entry point.
+/// Type-check an entire program. Returns `Ok(())` if it is well-typed, otherwise
+/// *all* discovered errors.
+///
+/// The checker runs in deliberate passes, because COOL allows forward
+/// references (a class may use another defined later in the file):
+/// 1. **Headers** — register every class name and its declared parent, so the
+///    full set of types is known before we look at any feature.
+/// 2. **Inheritance** — verify parents exist and there are no cycles, then cache
+///    the ancestry chains.
+/// 3. **Features + bodies** — install attribute/method signatures, check method
+///    overrides, and finally type-check every expression body.
 pub fn type_check_program(p: &Program) -> Result<(), Vec<TypeError>> {
     let mut errors = vec![];
     let mut ctx = TypeContext::new();
@@ -276,6 +353,9 @@ pub fn type_check_program(p: &Program) -> Result<(), Vec<TypeError>> {
     }
 }
 
+/// Pass 1: record each user class's name and parent in the class table, checking
+/// for duplicate definitions and illegal parents (you may not inherit from the
+/// basic value types `Int`/`Bool`/`String`, nor from `SELF_TYPE`).
 fn install_user_class_headers(ctx: &mut TypeContext, p: &Program, errors: &mut Vec<TypeError>) {
     for c in &p.classes {
         let name = c.name.as_str();
@@ -307,6 +387,10 @@ fn install_user_class_headers(ctx: &mut TypeContext, p: &Program, errors: &mut V
     }
 }
 
+/// Pass 2: check the inheritance graph is well-formed — every parent names a
+/// real class, and no class is its own (transitive) ancestor. A cycle would make
+/// the ancestry walk loop forever, so this must pass before anything relies on
+/// the inheritance cache.
 fn validate_inheritance(ctx: &TypeContext, errors: &mut Vec<TypeError>) {
     // Parent existence
     for (name, info) in &ctx.classes {
@@ -346,6 +430,14 @@ fn validate_inheritance(ctx: &TypeContext, errors: &mut Vec<TypeError>) {
     }
 }
 
+/// Pass 3: the bulk of the checker. Runs in three sub-phases over a local copy
+/// of the context (`ctx2`), which we mutate to add feature signatures:
+///   - Phase 1 installs attribute types and method signatures (catching
+///     duplicate features, duplicate formals, and references to unknown types);
+///   - Phase 2 verifies any method that overrides an inherited one keeps the
+///     exact same signature (COOL forbids changing it);
+///   - Phase 3 type-checks every attribute initializer and method body against
+///     its declared type using [`type_of_expr`].
 fn install_features_and_check(ctx: &TypeContext, p: &Program, errors: &mut Vec<TypeError>) {
     let mut ctx2 = ctx.clone();
 
@@ -358,12 +450,12 @@ fn install_features_and_check(ctx: &TypeContext, p: &Program, errors: &mut Vec<T
                 Feature::Attr { name, ty, .. } => {
                     let declared = parse_ty_name(ty);
 
-                    if let CoolType::Named(tn) = &declared {
-                        if !ctx2.has_class(tn) {
-                            errors.push(TypeError::new(format!(
-                                "Unknown type '{tn}' for attribute {cname}.{name}"
-                            )));
-                        }
+                    if let CoolType::Named(tn) = &declared
+                        && !ctx2.has_class(tn)
+                    {
+                        errors.push(TypeError::new(format!(
+                            "Unknown type '{tn}' for attribute {cname}.{name}"
+                        )));
                     }
 
                     // Use single HashMap lookup with get_mut to check and insert
@@ -395,24 +487,24 @@ fn install_features_and_check(ctx: &TypeContext, p: &Program, errors: &mut Vec<T
                             )));
                         }
                         let t = parse_ty_name(&f.ty);
-                        if let CoolType::Named(tn) = &t {
-                            if !ctx2.has_class(tn) {
-                                errors.push(TypeError::new(format!(
-                                    "Unknown type '{tn}' for formal {} in method {cname}.{name}",
-                                    f.name
-                                )));
-                            }
+                        if let CoolType::Named(tn) = &t
+                            && !ctx2.has_class(tn)
+                        {
+                            errors.push(TypeError::new(format!(
+                                "Unknown type '{tn}' for formal {} in method {cname}.{name}",
+                                f.name
+                            )));
                         }
                         formal_tys.push(t);
                     }
 
                     let ret = parse_ty_name(ret_type);
-                    if let CoolType::Named(tn) = &ret {
-                        if !ctx2.has_class(tn) {
-                            errors.push(TypeError::new(format!(
-                                "Unknown return type '{tn}' for method {cname}.{name}"
-                            )));
-                        }
+                    if let CoolType::Named(tn) = &ret
+                        && !ctx2.has_class(tn)
+                    {
+                        errors.push(TypeError::new(format!(
+                            "Unknown return type '{tn}' for method {cname}.{name}"
+                        )));
                     }
 
                     let sig = MethodSig {
@@ -445,18 +537,17 @@ fn install_features_and_check(ctx: &TypeContext, p: &Program, errors: &mut Vec<T
             .unwrap_or_else(|| OBJECT.to_string());
 
         for feat in &class.features {
-            if let Feature::Method { name, .. } = feat {
-                if let Some(parent_sig) = ctx2.lookup_method(&parent, name) {
-                    // Get method directly from current class instead of walking inheritance chain
-                    if let Some(class_info) = ctx2.classes.get(cname) {
-                        if let Some(my_sig) = class_info.methods.get(name) {
-                            if my_sig != &parent_sig {
-                                errors.push(TypeError::new(format!(
+            if let Feature::Method { name, .. } = feat
+                && let Some(parent_sig) = ctx2.lookup_method(&parent, name)
+            {
+                // Get method directly from current class instead of walking inheritance chain
+                if let Some(class_info) = ctx2.classes.get(cname)
+                    && let Some(my_sig) = class_info.methods.get(name)
+                    && my_sig != &parent_sig
+                {
+                    errors.push(TypeError::new(format!(
                                     "Invalid override of method {cname}.{name}: signature differs from inherited method"
                                 )));
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -479,8 +570,7 @@ fn install_features_and_check(ctx: &TypeContext, p: &Program, errors: &mut Vec<T
                         if !ctx2.conforms(&t_init, &declared, cname) {
                             errors.push(TypeError::new(format!(
                                 "Attribute init type does not conform: {cname}.{name} : {} <- {}",
-                                declared.as_named().unwrap_or("").to_string(),
-                                t_init.as_named().unwrap_or("").to_string()
+                                declared, t_init
                             )));
                         }
                     }
@@ -504,7 +594,7 @@ fn install_features_and_check(ctx: &TypeContext, p: &Program, errors: &mut Vec<T
                     if !ctx2.conforms(&body_ty, &declared_ret, cname) {
                         errors.push(TypeError::new(format!(
                             "Method body type does not conform: {cname}.{name} declared {} but body is {}",
-                            declared_ret.as_named().unwrap_or("").to_string(), body_ty.as_named().unwrap_or("").to_string()
+                            declared_ret, body_ty
                         )));
                     }
                 }
@@ -513,6 +603,9 @@ fn install_features_and_check(ctx: &TypeContext, p: &Program, errors: &mut Vec<T
     }
 }
 
+/// Seed an object environment with every attribute visible in `class`. We walk
+/// the ancestry chain from `Object` *down* to `class` (note the `.rev()`), so a
+/// subclass attribute would override an ancestor's of the same name.
 fn add_all_attrs_to_env(ctx: &TypeContext, class: &str, env: &mut ObjEnv) {
     // Use inheritance_chain helper and reverse to go from Object down to current class
     let chain = ctx.inheritance_chain(class);
@@ -525,7 +618,14 @@ fn add_all_attrs_to_env(ctx: &TypeContext, class: &str, env: &mut ObjEnv) {
     }
 }
 
-/// Expression typing.
+/// Compute the type of an expression — the core typing judgement, written
+/// `O, M, C ⊢ e : T` in the manual (under environment `O`, method table `M`, and
+/// current class `C`, expression `e` has type `T`).
+///
+/// This is a recursive walk: each variant types its sub-expressions, applies the
+/// relevant rule, and returns the resulting type. On a violation it pushes a
+/// `TypeError` and returns a sensible fallback type so checking can continue
+/// rather than aborting (see the module-level note on error recovery).
 fn type_of_expr(
     ctx: &TypeContext,
     o: &mut ObjEnv,
@@ -563,8 +663,7 @@ fn type_of_expr(
             if !ctx.conforms(&t_rhs, &t_var, current_class) {
                 errors.push(TypeError::new(format!(
                     "Type mismatch in assignment '{name} <- ...': rhs {} does not conform to {}",
-                    t_rhs.as_named().unwrap_or("").to_string(),
-                    t_var.as_named().unwrap_or("").to_string()
+                    t_rhs, t_var
                 )));
             }
             t_rhs
@@ -583,7 +682,7 @@ fn type_of_expr(
             if ctx.resolve_self_type(&t_cond, current_class) != CoolType::named(BOOL) {
                 errors.push(TypeError::new(format!(
                     "If condition must be Bool, got {}",
-                    t_cond.as_named().unwrap_or("").to_string()
+                    t_cond
                 )));
             }
             let t_then = type_of_expr(ctx, o, current_class, then_, errors);
@@ -596,7 +695,7 @@ fn type_of_expr(
             if ctx.resolve_self_type(&t_cond, current_class) != CoolType::named(BOOL) {
                 errors.push(TypeError::new(format!(
                     "While condition must be Bool, got {}",
-                    t_cond.as_named().unwrap_or("").to_string()
+                    t_cond
                 )));
             }
             let _ = type_of_expr(ctx, o, current_class, body, errors);
@@ -607,13 +706,13 @@ fn type_of_expr(
             o.push();
             for b in bindings {
                 let declared = parse_ty_name(&b.ty);
-                if let CoolType::Named(tn) = &declared {
-                    if !ctx.has_class(tn) {
-                        errors.push(TypeError::new(format!(
-                            "Unknown type '{tn}' in let binding '{}'",
-                            b.name
-                        )));
-                    }
+                if let CoolType::Named(tn) = &declared
+                    && !ctx.has_class(tn)
+                {
+                    errors.push(TypeError::new(format!(
+                        "Unknown type '{tn}' in let binding '{}'",
+                        b.name
+                    )));
                 }
 
                 if let Some(init) = &b.init {
@@ -621,9 +720,7 @@ fn type_of_expr(
                     if !ctx.conforms(&t_init, &declared, current_class) {
                         errors.push(TypeError::new(format!(
                             "Let init type mismatch for {} : {} <- {}",
-                            b.name,
-                            declared.as_named().unwrap_or("").to_string(),
-                            t_init.as_named().unwrap_or("").to_string()
+                            b.name, declared, t_init
                         )));
                     }
                 }
@@ -644,12 +741,12 @@ fn type_of_expr(
 
             for arm in arms {
                 let arm_ty = parse_ty_name(&arm.ty);
-                if let CoolType::Named(tn) = ctx.resolve_self_type(&arm_ty, current_class) {
-                    if !seen_types.insert(tn.clone()) {
-                        errors.push(TypeError::new(format!(
-                            "Duplicate type '{tn}' in case arms"
-                        )));
-                    }
+                if let CoolType::Named(tn) = ctx.resolve_self_type(&arm_ty, current_class)
+                    && !seen_types.insert(tn.clone())
+                {
+                    errors.push(TypeError::new(format!(
+                        "Duplicate type '{tn}' in case arms"
+                    )));
                 }
 
                 o.push();
@@ -685,10 +782,7 @@ fn type_of_expr(
         Expr::Not(inner) => {
             let t = type_of_expr(ctx, o, current_class, inner, errors);
             if ctx.resolve_self_type(&t, current_class) != CoolType::named(BOOL) {
-                errors.push(TypeError::new(format!(
-                    "'not' expects Bool, got {}",
-                    t.as_named().unwrap_or("").to_string()
-                )));
+                errors.push(TypeError::new(format!("'not' expects Bool, got {}", t)));
             }
             CoolType::named(BOOL)
         }
@@ -696,10 +790,7 @@ fn type_of_expr(
         Expr::Neg(inner) => {
             let t = type_of_expr(ctx, o, current_class, inner, errors);
             if ctx.resolve_self_type(&t, current_class) != CoolType::named(INT) {
-                errors.push(TypeError::new(format!(
-                    "'~' expects Int, got {}",
-                    t.as_named().unwrap_or("").to_string()
-                )));
+                errors.push(TypeError::new(format!("'~' expects Int, got {}", t)));
             }
             CoolType::named(INT)
         }
@@ -717,8 +808,7 @@ fn type_of_expr(
                     if tl_resolved != CoolType::named(INT) || tr_resolved != CoolType::named(INT) {
                         errors.push(TypeError::new(format!(
                             "Arithmetic op expects Int/Int, got {} and {}",
-                            tl.as_named().unwrap_or("").to_string(),
-                            tr.as_named().unwrap_or("").to_string()
+                            tl, tr
                         )));
                     }
                     CoolType::named(INT)
@@ -728,8 +818,7 @@ fn type_of_expr(
                     if tl_resolved != CoolType::named(INT) || tr_resolved != CoolType::named(INT) {
                         errors.push(TypeError::new(format!(
                             "Comparison op expects Int/Int, got {} and {}",
-                            tl.as_named().unwrap_or("").to_string(),
-                            tr.as_named().unwrap_or("").to_string()
+                            tl, tr
                         )));
                     }
                     CoolType::named(BOOL)
@@ -756,8 +845,7 @@ fn type_of_expr(
                     } else if basic(&tl_resolved).is_some() || basic(&tr_resolved).is_some() {
                         errors.push(TypeError::new(format!(
                             "Illegal equality test between {} and {}",
-                            tl_resolved.as_named().unwrap_or(""),
-                            tr_resolved.as_named().unwrap_or("")
+                            tl_resolved, tr_resolved
                         )));
                     }
 
@@ -793,8 +881,7 @@ fn type_of_expr(
                     if !ctx.conforms(&t0, &st_ty, current_class) {
                         errors.push(TypeError::new(format!(
                             "Static dispatch requires receiver type {} to conform to {}",
-                            t0.as_named().unwrap_or("").to_string(),
-                            st
+                            t0, st
                         )));
                     }
                     st.clone()
@@ -819,15 +906,15 @@ fn type_of_expr(
 
             for (i, arg) in args.iter().enumerate() {
                 let t_arg = type_of_expr(ctx, o, current_class, arg, errors);
-                if let Some(t_formal) = sig.formals.get(i) {
-                    if !ctx.conforms(&t_arg, t_formal, current_class) {
-                        errors.push(TypeError::new(format!(
+                if let Some(t_formal) = sig.formals.get(i)
+                    && !ctx.conforms(&t_arg, t_formal, current_class)
+                {
+                    errors.push(TypeError::new(format!(
                             "Arg {} type mismatch calling {dispatch_class}.{method}: expected {}, got {}",
                             i + 1,
-                            t_formal.as_named().unwrap_or("").to_string(),
-                            t_arg.as_named().unwrap_or("").to_string()
+                            t_formal,
+                            t_arg
                         )));
-                    }
                 }
             }
 

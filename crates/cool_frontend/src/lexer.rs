@@ -1,8 +1,30 @@
 // Copyright 2025 Diivanand Ramalingam
 // Licensed under the Apache License, Version 2.0
 
+//! Lexer (tokenizer): turns COOL source text into a flat `Vec<Tok>`.
+//!
+//! This is the compiler's first stage. It throws away whitespace and comments
+//! and groups characters into the smallest meaningful units — keywords,
+//! identifiers, literals, operators — that the parser then assembles into a tree.
+//!
+//! We use the [`logos`] crate, which compiles the `#[token]` / `#[regex]`
+//! attributes below into a fast deterministic finite automaton (DFA). Each
+//! variant is a *token kind*; variants like `Int(i64)` also carry a decoded
+//! *value* produced by their callback.
+//!
+//! ## Two-step pipeline: strip comments, then tokenize
+//!
+//! COOL allows *nested* block comments (`(* ... (* ... *) ... *)`). Regular
+//! expressions — and therefore Logos — cannot count nesting depth, so we can't
+//! express that as a single token rule. We handle it with a small hand-written
+//! pre-pass ([`strip_comments`]) that removes comments before Logos ever runs.
+
 use logos::Logos;
 
+/// A single lexical token.
+///
+/// `#[logos(skip ...)]` tells Logos to silently consume (and discard) runs of
+/// whitespace between tokens so we never see them in the output stream.
 #[derive(Logos, Debug, Clone, PartialEq, Eq, Hash)]
 #[logos(skip r"[ \t\r\n\f\v]+")]
 pub enum Tok {
@@ -112,9 +134,12 @@ pub enum Tok {
     ObjId(String),
 }
 
+/// Logos callback for string literals: decode escape sequences into the actual
+/// characters they denote (`\n` -> newline, etc.) and strip the surrounding
+/// quotes. The `#[regex]` above guarantees `raw` starts and ends with `"`.
 fn parse_string(lex: &mut logos::Lexer<Tok>) -> String {
     let raw = lex.slice();
-    let inner = &raw[1..raw.len() - 1];
+    let inner = &raw[1..raw.len() - 1]; // drop the opening and closing quotes
     let mut out = String::new();
     let mut chars = inner.chars();
 
@@ -137,59 +162,71 @@ fn parse_string(lex: &mut logos::Lexer<Tok>) -> String {
     out
 }
 
-/// Strip COOL comments:
-///  - line comments: -- ... \n
-///  - block comments: (* ... *) nested
+/// Remove COOL comments from source text, leaving everything else byte-for-byte:
+///  - line comments:  `-- ... <newline>`
+///  - block comments: `(* ... *)`, which may nest arbitrarily deep
+///
+/// We scan the raw bytes because every character we care about (`-`, `(`, `*`,
+/// `)`, `\n`) is ASCII, and in UTF-8 an ASCII byte never appears as part of a
+/// multi-byte character. That lets us look for these markers byte-by-byte
+/// without decoding, while copying *all other bytes verbatim* into a `Vec<u8>`
+/// so multi-byte characters inside string literals survive intact. (Pushing
+/// `bytes[i] as char` instead would mangle any byte ≥ 0x80.)
 pub fn strip_comments(input: &str) -> Result<String, String> {
     let bytes = input.as_bytes();
     let mut i = 0usize;
-    let mut out = String::with_capacity(input.len());
-    let mut depth = 0usize;
+    let mut out: Vec<u8> = Vec::with_capacity(input.len());
+    let mut depth = 0usize; // current block-comment nesting depth (0 = not in one)
+
+    // Convenience: does a two-byte marker start at position `i`?
+    let starts_with =
+        |i: usize, a: u8, b: u8| i + 1 < bytes.len() && bytes[i] == a && bytes[i + 1] == b;
 
     while i < bytes.len() {
         if depth > 0 {
-            if i + 1 < bytes.len() && bytes[i] == b'(' && bytes[i + 1] == b'*' {
+            // Inside a block comment: only `(*` (deeper) and `*)` (shallower) matter.
+            if starts_with(i, b'(', b'*') {
                 depth += 1;
                 i += 2;
-                continue;
-            }
-            if i + 1 < bytes.len() && bytes[i] == b'*' && bytes[i + 1] == b')' {
+            } else if starts_with(i, b'*', b')') {
                 depth -= 1;
                 i += 2;
-                continue;
+            } else {
+                i += 1; // discard ordinary comment text
             }
-            i += 1;
             continue;
         }
 
-        // line comment "--"
-        if i + 1 < bytes.len() && bytes[i] == b'-' && bytes[i + 1] == b'-' {
+        if starts_with(i, b'-', b'-') {
+            // Line comment: skip to (but keep) the end-of-line.
             i += 2;
             while i < bytes.len() && bytes[i] != b'\n' {
                 i += 1;
             }
-            continue;
-        }
-
-        // block comment "(*"
-        if i + 1 < bytes.len() && bytes[i] == b'(' && bytes[i + 1] == b'*' {
-            depth = 1;
+        } else if starts_with(i, b'(', b'*') {
+            depth = 1; // enter a block comment
             i += 2;
-            continue;
+        } else {
+            out.push(bytes[i]); // ordinary source byte: keep it
+            i += 1;
         }
-
-        out.push(bytes[i] as char);
-        i += 1;
     }
 
     if depth != 0 {
         return Err("unterminated block comment".to_string());
     }
-    Ok(out)
+
+    // `out` only ever drops whole comments from valid UTF-8 input, so it remains
+    // valid UTF-8; `from_utf8` therefore won't fail in practice.
+    String::from_utf8(out).map_err(|e| format!("invalid UTF-8 after stripping comments: {e}"))
 }
 
-/// Lex COOL input into tokens.
-/// Logos returns `Err(())` for invalid/unmatched input. We surface a string error with context.
+/// Lex COOL source into a flat token vector — the main entry point of this module.
+///
+/// Steps: strip comments, then run Logos over the cleaned text. Logos yields
+/// `Err(())` when it can't match the input at some position; we convert that
+/// into a descriptive error including the offending slice so callers get a
+/// useful message instead of an opaque unit error.
 pub fn lex(input: &str) -> Result<Vec<Tok>, String> {
     let cleaned = strip_comments(input)?;
     let mut toks = Vec::new();

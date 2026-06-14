@@ -1,21 +1,56 @@
 // Copyright 2025 Diivanand Ramalingam
 // Licensed under the Apache License, Version 2.0
 
+//! Parser: turns the lexer's `&[Tok]` into an [`ast::Program`](crate::ast::Program).
+//!
+//! Built with the [`chumsky`] parser-combinator library. A "combinator" parser
+//! is assembled from small parsers glued together with methods like
+//! `then`, `or`, `repeated`, and `ignore_then`; each returns a value describing
+//! *how* to parse, and the whole thing runs when you call `.parse(tokens)`.
+//!
+//! ## Hybrid strategy: recursive descent + Pratt
+//!
+//! The grammar splits cleanly in two:
+//!
+//! - **Structure** (programs, classes, features, formals, and the
+//!   statement-like expression forms `if`/`while`/`let`/`case`/blocks) is parsed
+//!   by straightforward *recursive descent*: one combinator function per grammar
+//!   rule, mirroring the manual's BNF.
+//! - **Operator expressions** (the arithmetic/comparison/assignment soup with
+//!   precedence and associativity) are parsed by a *Pratt* sub-parser, which
+//!   handles precedence with numeric binding powers instead of the many layered
+//!   grammar rules a pure recursive-descent parser would need. See the big
+//!   comment on the precedence table inside [`expr_parser`].
+//!
+//! ## A note on the lifetimes
+//!
+//! chumsky threads a `'src` lifetime through everything: parsers borrow from the
+//! input token slice and from each other. The `ParseError<'src>` / `PExtra<'src>`
+//! aliases below keep the (otherwise noisy) error-type parameters in one place.
+
 use chumsky::prelude::*;
 use chumsky::{extra, pratt};
 
 use crate::ast::*;
 use crate::lexer::Tok;
 
-/// chumsky 0.12 errors are lifetime-parameterized
+/// chumsky 0.12 errors are lifetime-parameterized; alias them for readability.
 pub type ParseError<'src> = chumsky::error::Simple<'src, Tok>;
+/// The "extra" type bundle chumsky carries (here: just our error type).
 pub type PExtra<'src> = extra::Err<ParseError<'src>>;
 
-/// Public API: parse a token slice into a Program.
+/// Public API: parse a token slice into a [`Program`], or return the list of
+/// parse errors. (`into_result` collapses chumsky's richer output into a plain
+/// `Result`, which is all the callers in this project need.)
 pub fn parse_program<'src>(tokens: &'src [Tok]) -> Result<Program, Vec<ParseError<'src>>> {
     program_parser().parse(tokens).into_result()
 }
 
+/// `program ::= (class ';')+`
+///
+/// One or more class definitions, each terminated by a semicolon, then EOF.
+/// `then_ignore(end())` forces the parser to consume *all* input — without it,
+/// trailing garbage after the last class would be silently ignored.
 pub fn program_parser<'src>() -> impl Parser<'src, &'src [Tok], Program, PExtra<'src>> {
     class_parser()
         .then_ignore(just(Tok::Semi))
@@ -26,6 +61,7 @@ pub fn program_parser<'src>() -> impl Parser<'src, &'src [Tok], Program, PExtra<
         .then_ignore(end())
 }
 
+/// `class ::= 'class' TYPE ['inherits' TYPE] '{' (feature ';')* '}'`
 fn class_parser<'src>() -> impl Parser<'src, &'src [Tok], Class, PExtra<'src>> {
     just(Tok::KwClass)
         .ignore_then(type_id())
@@ -47,6 +83,14 @@ fn class_parser<'src>() -> impl Parser<'src, &'src [Tok], Class, PExtra<'src>> {
         })
 }
 
+/// A feature is a method or an attribute. Both start with an object identifier,
+/// so we try the longer `method` form first and fall back to `attr` via `or`.
+/// chumsky backtracks automatically when `method` fails to match.
+///
+/// ```text
+/// feature ::= ID '(' [formal (',' formal)*] ')' ':' TYPE '{' expr '}'   -- method
+///           | ID ':' TYPE ['<-' expr]                                    -- attribute
+/// ```
 fn feature_parser<'src>() -> impl Parser<'src, &'src [Tok], Feature, PExtra<'src>> {
     let method = obj_id()
         .then(
@@ -91,10 +135,15 @@ fn formal_parser<'src>() -> impl Parser<'src, &'src [Tok], Formal, PExtra<'src>>
         .map(|(name, ty)| Formal { name, ty })
 }
 
+/// A type name: either a `TypeId` (capitalized identifier) or the special
+/// `SELF_TYPE` keyword, which we normalize to the string `"SELF_TYPE"` so later
+/// stages can treat type names uniformly as strings. `select!` is chumsky's
+/// pattern-matching combinator: it accepts a token and extracts a value from it.
 fn type_id<'src>() -> impl Parser<'src, &'src [Tok], String, PExtra<'src>> {
     select! { Tok::TypeId(s) => s }.or(just(Tok::SelfType).to("SELF_TYPE".to_string()))
 }
 
+/// An object identifier: a lowercase-initial name (variable/method/attribute).
 fn obj_id<'src>() -> impl Parser<'src, &'src [Tok], String, PExtra<'src>> {
     select! { Tok::ObjId(s) => s }
 }
@@ -108,6 +157,19 @@ fn literal<'src>() -> impl Parser<'src, &'src [Tok], Expr, PExtra<'src>> {
     }
 }
 
+/// The expression grammar — the heart of the parser.
+///
+/// Expressions are recursive (an `if` contains expressions, which may be more
+/// `if`s...), so the whole thing is wrapped in chumsky's `recursive`, which
+/// hands us an `expr` handle we can use *inside* its own definition.
+///
+/// It's built in layers, from tightest-binding to loosest:
+/// 1. **atoms** — self-contained forms (literals, `if`, `let`, parenthesized
+///    expressions, identifiers, ...);
+/// 2. **primary** — an atom, plus the implicit-`self` method-call shorthand;
+/// 3. **postfix** — primary followed by zero or more `.method(...)` /
+///    `@Type.method(...)` dispatch steps (left-associative, tightest of all);
+/// 4. **pratt** — the infix/prefix operator layer that resolves precedence.
 pub fn expr_parser<'src>() -> impl Parser<'src, &'src [Tok], Expr, PExtra<'src>> {
     recursive(|expr| {
         let paren = just(Tok::LParen)
@@ -215,7 +277,10 @@ pub fn expr_parser<'src>() -> impl Parser<'src, &'src [Tok], Expr, PExtra<'src>>
             )
             .then_ignore(just(Tok::RParen));
 
-        // Optional self-dispatch: id(args) => self.id(args)
+        // Implicit-self dispatch: a bare `id(args)` means `self.id(args)`. We
+        // detect "an identifier atom immediately followed by an argument list"
+        // and rewrite it into a `Dispatch` on `self`; anything else passes
+        // through unchanged.
         let primary =
             atom.then(args.clone().or_not())
                 .map(|(a, maybe_args)| match (a, maybe_args) {
@@ -228,7 +293,9 @@ pub fn expr_parser<'src>() -> impl Parser<'src, &'src [Tok], Expr, PExtra<'src>>
                     (other, _) => other,
                 });
 
-        // recv [@TYPE] . id(args)
+        // A single dispatch step: `[@TYPE] . id(args)`. The optional `@TYPE` is
+        // COOL's static dispatch, which forces the method to be looked up in a
+        // specific ancestor class rather than the receiver's dynamic type.
         let dispatch_step = just(Tok::At)
             .ignore_then(type_id())
             .or_not()
@@ -237,6 +304,9 @@ pub fn expr_parser<'src>() -> impl Parser<'src, &'src [Tok], Expr, PExtra<'src>>
             .then(args.clone())
             .map(|((static_ty, method), args)| (static_ty, method, args));
 
+        // Fold a chain of dispatch steps left-to-right so that
+        // `a.f().g()` becomes `Dispatch(Dispatch(a, f), g)` — each call's
+        // receiver is the result of the previous one.
         let postfix = primary
             .then(dispatch_step.repeated().collect::<Vec<_>>())
             .map(|(base, steps)| {
@@ -250,66 +320,122 @@ pub fn expr_parser<'src>() -> impl Parser<'src, &'src [Tok], Expr, PExtra<'src>>
                     })
             });
 
-        // Pratt fold signatures (from docs) :contentReference[oaicite:2]{index=2}
-        // prefix: |op, rhs, extra|
-        // infix:  |lhs, op, rhs, extra|
+        // --- Operator precedence (Pratt / "top-down operator precedence") ---
+        //
+        // COOL's precedence table, from the language manual (tightest binding
+        // at the top, loosest at the bottom):
+        //
+        //     .            dispatch          (handled above by `postfix`)
+        //     @            static dispatch   (handled above by `postfix`)
+        //     ~            integer negation
+        //     isvoid
+        //     * /          multiplicative
+        //     + -          additive
+        //     <= < =       comparison
+        //     not          boolean negation
+        //     <-           assignment
+        //
+        // chumsky's Pratt combinator encodes precedence as a numeric *binding
+        // power*: a HIGHER number binds more tightly. So we hand out descending
+        // powers as we move down the table above. Getting the ordering right is
+        // exactly what makes `1 + 2 * 3` parse as `1 + (2 * 3)` rather than
+        // `(1 + 2) * 3` — `*` (power 7) outranks `+` (power 6).
+        //
+        // Associativity is encoded separately: `left(p)` for left-associative
+        // infix operators (`a - b - c` = `(a - b) - c`) and `right(p)` for
+        // right-associative ones (assignment: `a <- b <- c` = `a <- (b <- c)`).
+        //
+        // Prefix binding power controls how much of the following expression the
+        // operator captures. `not` is given a *lower* power than the comparison
+        // operators so that `not a < b` parses as `not (a < b)`, while `~` and
+        // `isvoid` get the highest powers so `~a * b` parses as `(~a) * b`.
+        //
+        // Fold-closure signatures (from the chumsky docs):
+        //     prefix: |op, rhs, extra|
+        //     infix:  |lhs, op, rhs, extra|
+        const BP_NEG: u16 = 9; // ~
+        const BP_ISVOID: u16 = 8; // isvoid
+        const BP_MUL: u16 = 7; // * /
+        const BP_ADD: u16 = 6; // + -
+        const BP_CMP: u16 = 5; // <= < =
+        const BP_NOT: u16 = 4; // not
+        const BP_ASSIGN: u16 = 3; // <-
+
         let pratt_expr = postfix.pratt((
-            pratt::prefix(1, just(Tok::Tilde), |_, rhs, _| Expr::Neg(Box::new(rhs))),
-            pratt::prefix(1, just(Tok::KwIsVoid), |_, rhs, _| {
+            pratt::prefix(BP_NEG, just(Tok::Tilde), |_, rhs, _| {
+                Expr::Neg(Box::new(rhs))
+            }),
+            pratt::prefix(BP_ISVOID, just(Tok::KwIsVoid), |_, rhs, _| {
                 Expr::IsVoid(Box::new(rhs))
             }),
-            pratt::prefix(1, just(Tok::KwNot), |_, rhs, _| Expr::Not(Box::new(rhs))),
-            pratt::infix(pratt::left(2), just(Tok::Star), |lhs, _, rhs, _| {
+            pratt::infix(pratt::left(BP_MUL), just(Tok::Star), |lhs, _, rhs, _| {
                 Expr::Bin {
                     op: BinOp::Mul,
                     lhs: Box::new(lhs),
                     rhs: Box::new(rhs),
                 }
             }),
-            pratt::infix(pratt::left(2), just(Tok::Slash), |lhs, _, rhs, _| {
+            pratt::infix(pratt::left(BP_MUL), just(Tok::Slash), |lhs, _, rhs, _| {
                 Expr::Bin {
                     op: BinOp::Div,
                     lhs: Box::new(lhs),
                     rhs: Box::new(rhs),
                 }
             }),
-            pratt::infix(pratt::left(3), just(Tok::Plus), |lhs, _, rhs, _| {
+            pratt::infix(pratt::left(BP_ADD), just(Tok::Plus), |lhs, _, rhs, _| {
                 Expr::Bin {
                     op: BinOp::Add,
                     lhs: Box::new(lhs),
                     rhs: Box::new(rhs),
                 }
             }),
-            pratt::infix(pratt::left(3), just(Tok::Minus), |lhs, _, rhs, _| {
+            pratt::infix(pratt::left(BP_ADD), just(Tok::Minus), |lhs, _, rhs, _| {
                 Expr::Bin {
                     op: BinOp::Sub,
                     lhs: Box::new(lhs),
                     rhs: Box::new(rhs),
                 }
             }),
-            pratt::infix(pratt::left(4), just(Tok::Le), |lhs, _, rhs, _| Expr::Bin {
-                op: BinOp::Le,
-                lhs: Box::new(lhs),
-                rhs: Box::new(rhs),
+            // COOL treats `<= < =` as non-associative, but modelling them as
+            // left-associative is harmless: chained comparisons like `a < b < c`
+            // are caught later by the type checker (a `Bool` can't be compared to
+            // an `Int`), so we keep the parser simple.
+            pratt::infix(pratt::left(BP_CMP), just(Tok::Le), |lhs, _, rhs, _| {
+                Expr::Bin {
+                    op: BinOp::Le,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                }
             }),
-            pratt::infix(pratt::left(4), just(Tok::Lt), |lhs, _, rhs, _| Expr::Bin {
-                op: BinOp::Lt,
-                lhs: Box::new(lhs),
-                rhs: Box::new(rhs),
+            pratt::infix(pratt::left(BP_CMP), just(Tok::Lt), |lhs, _, rhs, _| {
+                Expr::Bin {
+                    op: BinOp::Lt,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                }
             }),
-            pratt::infix(pratt::left(4), just(Tok::Eq), |lhs, _, rhs, _| Expr::Bin {
-                op: BinOp::Eq,
-                lhs: Box::new(lhs),
-                rhs: Box::new(rhs),
+            pratt::infix(pratt::left(BP_CMP), just(Tok::Eq), |lhs, _, rhs, _| {
+                Expr::Bin {
+                    op: BinOp::Eq,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                }
+            }),
+            pratt::prefix(BP_NOT, just(Tok::KwNot), |_, rhs, _| {
+                Expr::Not(Box::new(rhs))
             }),
             pratt::infix(
-                pratt::right(5),
+                pratt::right(BP_ASSIGN),
                 just(Tok::Assign),
                 |lhs, _, rhs, _| match lhs {
                     Expr::Id(name) => Expr::Assign {
                         name,
                         expr: Box::new(rhs),
                     },
+                    // COOL only allows assignment to an identifier. The Pratt
+                    // fold can't emit a parse error here, so we record a sentinel
+                    // name; the type checker then reports it as an assignment to
+                    // an undefined identifier.
                     other => Expr::Assign {
                         name: "<non-id-lhs>".to_string(),
                         expr: Box::new(Expr::Paren(Box::new(other))),
@@ -709,6 +835,42 @@ mod tests {
         let toks = lex(src).unwrap();
         let prog = parse_program(&toks).unwrap();
         assert_eq!(prog.classes.len(), 1);
+    }
+
+    /// Regression test for operator precedence: `*` must bind tighter than `+`,
+    /// so `1 + 2 * 3` is `1 + (2 * 3)` (i.e. `Add(1, Mul(2, 3))`), NOT
+    /// `(1 + 2) * 3`. Earlier the Pratt binding-power table was inverted and
+    /// this produced the wrong tree (and `1 + 2 * 3` evaluated to 9, not 7).
+    #[test]
+    fn arithmetic_precedence_mul_binds_tighter_than_add() {
+        let src = r#"
+            class Main {
+              main() : Int { 1 + 2 * 3 };
+            };
+        "#;
+
+        let toks = lex(src).unwrap();
+        let prog = parse_program(&toks).unwrap();
+
+        let body = match &prog.classes[0].features[0] {
+            Feature::Method { body, .. } => body,
+            _ => panic!("expected method"),
+        };
+
+        match body {
+            Expr::Bin {
+                op: BinOp::Add,
+                lhs,
+                rhs,
+            } => {
+                assert_eq!(**lhs, Expr::Int(1), "lhs of + should be the literal 1");
+                assert!(
+                    matches!(&**rhs, Expr::Bin { op: BinOp::Mul, .. }),
+                    "rhs of + should be the (2 * 3) subtree, got {rhs:?}"
+                );
+            }
+            other => panic!("expected top-level Add, got {other:?}"),
+        }
     }
 
     #[test]

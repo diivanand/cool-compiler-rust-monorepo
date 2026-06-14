@@ -1,12 +1,22 @@
 // Copyright 2025 Diivanand Ramalingam
 // Licensed under the Apache License, Version 2.0
 
-//! COOL runtime ABI definitions shared between codegen and runtime.
+//! The Application Binary Interface (ABI) contract between the generated code
+//! and the runtime.
+//!
+//! Codegen and `cool_runtime` are compiled separately and only meet at link
+//! time, so they must agree *byte-for-byte* on object layout and *exactly* on
+//! symbol names. This module is the single source of truth for both. If you
+//! change `ObjHeader` in the runtime, change the offsets here (and the matching
+//! `struct_type` in `lowering.rs`) too — a mismatch produces memory corruption
+//! that no compiler error will catch.
 
-/// Size and layout must match `cool_runtime::ObjHeader`.
+/// Number of pointer-sized words in the object header.
 pub const OBJ_HEADER_WORDS: usize = 4;
 
-/// Offsets (in bytes) into the object header.
+/// Byte offsets of each field within the object header. Note the gap between
+/// `MARKED` (offset 12, one byte) and `TAG` (offset 16): the 3 bytes of padding
+/// keep `tag` aligned to a 4-byte boundary, matching the C struct layout.
 pub const OFFSET_VTABLE_PTR: usize = 0;
 pub const OFFSET_SIZE_BYTES: usize = 8;
 pub const OFFSET_MARKED: usize = 12;

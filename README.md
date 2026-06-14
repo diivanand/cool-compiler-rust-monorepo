@@ -2,13 +2,18 @@
 
 A **from-scratch implementation of a full COOL (Classroom Object-Oriented Language) compiler**, written in **Rust**, following the original COOL language specification.
 
-This project currently implements the **frontend** (lexer, parser, AST) and is explicitly designed to evolve into a **complete end-to-end compiler** that:
+This project implements a complete **frontend** (lexer, parser, AST, and full static type checker) plus a **runtime** with a garbage collector, and is actively growing its **LLVM backend**. It is explicitly designed to be a **complete end-to-end compiler** that:
 
 - Compiles COOL source code to **LLVM IR**
 - Lowers LLVM IR to **native Apple Silicon (arm64)** code
 - Includes a **custom runtime** for object layout and method dispatch
 - Implements a **basic stop-the-world mark-and-sweep garbage collector**
 - Produces native macOS executables on Apple Silicon
+
+> 📐 **New here?** See **[ARCHITECTURE.md](ARCHITECTURE.md)** for a guided tour that
+> connects COOL language concepts, classic compiler theory, and LLVM/runtime
+> internals to the actual modules, functions, and structs in this repo (with
+> diagrams).
 
 ---
 
@@ -142,6 +147,64 @@ cool-compiler-rust-monorepo/
 ├── NOTICE.md                   # Attribution notice
 └── README.md
 ```
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+- **Rust** (2024 edition; install via [rustup](https://rustup.rs))
+- **LLVM 21.1.x** — required by the `inkwell` backend (`cool_codegen`, `coolc`).
+  On macOS: `brew install llvm@21`, then point the build at it:
+  ```bash
+  export LLVM_SYS_211_PREFIX="$(brew --prefix llvm@21)"
+  ```
+- **clang** — used by `coolc` as the linker driver (ships with Xcode CLT).
+- **Apple Silicon (arm64) macOS** — the emitted object/executable targets
+  `aarch64-apple-darwin`.
+
+> The frontend-only crates (`cool_frontend`, `cool_parse_cli`) do **not** need
+> LLVM, so you can explore the lexer/parser/type checker without it.
+
+### Build & test
+
+```bash
+cargo build --workspace      # build everything
+cargo test  --workspace      # run the full test suite
+cargo clippy --workspace     # lint
+```
+
+### Inspect the frontend (no LLVM needed)
+
+`cool_parse_cli` lexes + parses + type-checks and dumps the AST:
+
+```bash
+cargo run -p cool_parse_cli -- examples/test.cl     # prints the AST, then "OK"
+cargo run -p cool_parse_cli -- examples/bad.cl      # reports a type error
+```
+
+### Compile a program to a native executable
+
+```bash
+# IMPORTANT: build the runtime static lib first. coolc links against
+# target/debug/libcool_runtime.a at link time, and `cargo run -p coolc` does NOT
+# rebuild it automatically (it isn't a Cargo dependency of coolc).
+cargo build -p cool_runtime
+
+cargo run -p coolc -- examples/test.cl              # writes a.out.o and ./a.out
+./a.out                                             # prints: 7
+```
+
+`examples/test.cl` is `class Main { main() : Int { 1 + 2 * 3 } }`, so the program
+prints **`7`** (note `*` binds tighter than `+`). You can pass multiple `.cl`
+files; they are concatenated into one program.
+
+> **Backend scope today:** code generation currently handles a demonstrative
+> subset — a `Main.main` whose body is an integer arithmetic expression — exercising
+> the whole pipeline (object model, vtable dispatch, allocation, GC, linking) end
+> to end. Generalizing lowering to all classes/expressions is the active frontier.
+> The frontend and type checker handle the full language.
+
+---
 
 ## Parsing Strategy
 
